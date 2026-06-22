@@ -1,0 +1,10 @@
+ENV/AmazonCredentials.env
+.env
+web/.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+web/node_modules/
+web/dist/
+data/cache/

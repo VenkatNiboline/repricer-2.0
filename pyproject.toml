@@ -1,0 +1,20 @@
+[project]
+name = "amazon-repricer"
+version = "1.0.0"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "requests>=2.28.0",
+  "python-dotenv>=1.0.0",
+  "pydantic>=2.0.0",
+  "supabase>=2.10.0",
+  "pyyaml>=6.0.0",
+  "email-validator>=2.0.0",
+]
+
+[tool.vercel]
+entrypoint = "api/main.py"
+
+[tool.vercel.scripts]
+build = "python scripts/vercel_build.py"

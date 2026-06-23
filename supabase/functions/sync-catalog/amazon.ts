@@ -1,6 +1,12 @@
 const MARKETPLACE_IDS: Record<string, string> = {
   DE: "A1PA6795UKMFR9",
   FR: "A13V1IB3VIYZZH",
+  IT: "APJ6JRA9NG5V4",
+  ES: "A1RKKUPIHCS9HS",
+  NL: "A1805IZSGTT6HS",
+  BE: "AMEN7PMS3EDWL",
+  PL: "A1C3SOZRARQ6R3",
+  SE: "A2NODRKZP88ZB9",
   UK: "A1F83G8C2ARO7P",
   US: "ATVPDKIKX0DER",
 };
@@ -8,9 +14,25 @@ const MARKETPLACE_IDS: Record<string, string> = {
 const COUNTRY_CURRENCIES: Record<string, string> = {
   DE: "EUR",
   FR: "EUR",
+  IT: "EUR",
+  ES: "EUR",
+  NL: "EUR",
+  BE: "EUR",
+  PL: "PLN",
+  SE: "SEK",
   UK: "GBP",
   US: "USD",
 };
+
+const SUPPORTED_COUNTRIES = new Set(Object.keys(MARKETPLACE_IDS).filter((c) => c !== "US"));
+
+export function catalogTableForCountry(country: string): string {
+  const code = country.toUpperCase();
+  if (!SUPPORTED_COUNTRIES.has(code)) {
+    throw new Error(`Unsupported marketplace: ${country}`);
+  }
+  return `sku_catalog_${code.toLowerCase()}`;
+}
 
 const SP_API_BASE: Record<string, string> = {
   EU: "https://sellingpartnerapi-eu.amazon.com",
@@ -116,6 +138,20 @@ export function extractCurrentPrice(
   return priceFromOffersSection(offers, marketplaceIdValue);
 }
 
+export function extractProductName(listing: Record<string, unknown>): string | null {
+  const summaries = (listing.summaries ?? []) as Record<string, unknown>[];
+  const fromSummary = summaries[0]?.itemName as string | undefined;
+  if (fromSummary) return fromSummary;
+
+  const attrs = (listing.attributes ?? {}) as Record<string, unknown>;
+  const itemNames = (attrs.item_name ?? []) as Record<string, unknown>[];
+  for (const entry of itemNames) {
+    const value = entry.value as string | undefined;
+    if (value) return value;
+  }
+  return null;
+}
+
 export async function getAccessToken(): Promise<string> {
   const refreshToken = Deno.env.get("LWA_REFRESH_TOKEN");
   const clientId = Deno.env.get("LWA_CLIENT_ID");
@@ -149,6 +185,7 @@ export async function getAccessToken(): Promise<string> {
 export interface CatalogRow {
   sku: string;
   asin: string | null;
+  product_name: string | null;
   product_type: string | null;
   fulfillment: string;
   price: number | null;
@@ -168,6 +205,7 @@ export function rowFromItem(
   const currency = currencyForCountry(country);
   const fulfillment = classifyFulfillment(sku, item, mpId);
   const price = extractCurrentPrice(item, mpId);
+  const productName = extractProductName(item);
   const summaries = (item.summaries ?? []) as Record<string, unknown>[];
   const asin = summaries[0]?.asin as string | undefined;
   const productType = summaries[0]?.productType as string | undefined;
@@ -175,6 +213,7 @@ export function rowFromItem(
   return {
     sku,
     asin: asin ?? null,
+    product_name: productName,
     product_type: productType ?? null,
     fulfillment,
     price,

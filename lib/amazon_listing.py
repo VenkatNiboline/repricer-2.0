@@ -15,6 +15,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 import get_access_token
+from env_config import load_env
 
 SCRIPT_DIR = Path(__file__).parent.parent
 ENV_FILE = SCRIPT_DIR / "ENV" / "AmazonCredentials.env"
@@ -56,13 +57,10 @@ class AmazonListingClient:
     """Client for Listings Items GET/PATCH operations."""
 
     def __init__(self, region: str = "EU"):
-        if not ENV_FILE.exists():
-            raise FileNotFoundError(f"Credentials file not found: {ENV_FILE}")
-
-        load_dotenv(ENV_FILE)
+        load_env()
         self.seller_id = os.getenv("SELLER_ID")
         if not self.seller_id:
-            raise ValueError("SELLER_ID not found in credentials file")
+            raise ValueError("SELLER_ID not configured. Set it in ENV or Vercel environment variables.")
 
         self.access_token: Optional[str] = None
         self.region = region.upper()

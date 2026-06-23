@@ -2,7 +2,6 @@ import React, { createContext, useContext, useEffect } from "react";
 import type { AppSettingsInput, RepricerSettings } from "../api/client";
 import { api, loadSettings, saveSettings } from "../api/client";
 import { useAuth } from "./AuthProvider";
-import { supabaseConfigured } from "../lib/supabase";
 
 interface SettingsContextValue {
   settings: RepricerSettings;
@@ -34,13 +33,13 @@ function toAppSettings(settings: RepricerSettings): AppSettingsInput {
 }
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, authConfigured } = useAuth();
   const [settings, setSettingsState] = React.useState<RepricerSettings>(loadSettings);
   const [dbSynced, setDbSynced] = React.useState(false);
   const [dbError, setDbError] = React.useState<string | null>(null);
 
   useEffect(() => {
-    if (!supabaseConfigured) return;
+    if (!authConfigured || !user) return;
     let cancelled = false;
     api
       .getAppSettings()
@@ -63,14 +62,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authConfigured, user]);
 
   const setSettings = (next: Partial<RepricerSettings>) => {
     setSettingsState((prev) => {
       const merged = { ...prev, ...next };
       saveSettings(merged);
 
-      if (supabaseConfigured && user) {
+      if (authConfigured && user) {
         api
           .saveAppSettings(toAppSettings(merged))
           .then(() => {

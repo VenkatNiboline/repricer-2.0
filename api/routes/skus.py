@@ -193,6 +193,7 @@ class FbmSkuRow(BaseModel):
 class CatalogRow(BaseModel):
     sku: str
     asin: Optional[str] = None
+    product_name: Optional[str] = None
     product_type: Optional[str] = None
     fulfillment: str
     price: Optional[float]
@@ -228,7 +229,7 @@ def get_catalog_stats(
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
-    payload = scan_catalog(country, region, refresh=refresh)
+    payload = get_catalog_payload(country, refresh=False) if not refresh else scan_catalog(country, region, refresh=True)
     return CatalogStats(**catalog_stats(payload))
 
 
@@ -270,8 +271,6 @@ def get_catalog(
         payload = scan_catalog(country, region, refresh=True, created_by=user_id)
     else:
         payload = get_catalog_payload(country, fulfillment=fulfillment, refresh=False)
-        if not payload.get("rows") and payload.get("source") == "empty":
-            payload = scan_catalog(country, region, refresh=True, created_by=user_id)
 
     rows = payload.get("rows") or []
     if fulfillment and fulfillment.upper() != "ALL":

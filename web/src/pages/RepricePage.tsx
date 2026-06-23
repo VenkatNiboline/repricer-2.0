@@ -226,6 +226,15 @@ export function RepricePage() {
           {result && (
             <div className="panel p-6">
               <h2 className="text-sm font-semibold text-ink">Results</h2>
+              {result.history_saved === false && (
+                <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                  <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>
+                    Price change was not saved to history
+                    {result.history_error ? `: ${result.history_error}` : "."}
+                  </span>
+                </div>
+              )}
               <div className="mt-4 space-y-2">
                 {result.results.map((row) => (
                   <div
@@ -258,6 +267,9 @@ export function RepricePage() {
                         <div className="text-xs text-emerald-600">
                           Verified {formatPrice(row.verified_price, result.currency)}
                         </div>
+                      )}
+                      {row.pushed && row.verified_price == null && row.error?.includes("expected") && (
+                        <div className="text-xs text-amber-600">Reflection pending</div>
                       )}
                     </div>
                   </div>

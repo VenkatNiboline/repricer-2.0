@@ -1,11 +1,12 @@
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { Layout } from "../components/Layout";
 import { useSettings } from "../components/SettingsProvider";
-import { supabaseConfigured } from "../lib/supabase";
-import { useEffect, useState } from "react";
+import { useAuth } from "../components/AuthProvider";
 
 export function SettingsPage() {
   const { settings, setSettings, dbSynced, dbError } = useSettings();
+  const { authConfigured } = useAuth();
   const [marketplaces, setMarketplaces] = useState<{ code: string; currency: string }[]>([]);
 
   useEffect(() => {
@@ -17,7 +18,7 @@ export function SettingsPage() {
       title="Settings"
       subtitle="Configure marketplace, sync rules, and FBM discount."
     >
-      {supabaseConfigured && (
+      {authConfigured && (
         <div
           className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
             dbError
@@ -28,10 +29,10 @@ export function SettingsPage() {
           }`}
         >
           {dbError
-            ? `Supabase: ${dbError}`
+            ? `Settings: ${dbError}`
             : dbSynced
-              ? "Settings synced with Supabase."
-              : "Loading settings from Supabase…"}
+              ? "Settings synced with server."
+              : "Loading settings…"}
         </div>
       )}
       <div className="max-w-2xl space-y-6">
@@ -39,9 +40,7 @@ export function SettingsPage() {
           <h2 className="text-sm font-semibold text-ink">Marketplace</h2>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-ink-muted">
-                Country
-              </label>
+              <label className="mb-1.5 block text-xs font-medium text-ink-muted">Country</label>
               <select
                 className="input-field"
                 value={settings.country}
@@ -55,9 +54,7 @@ export function SettingsPage() {
               </select>
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-ink-muted">
-                SP-API region
-              </label>
+              <label className="mb-1.5 block text-xs font-medium text-ink-muted">SP-API region</label>
               <select
                 className="input-field"
                 value={settings.region}
@@ -78,7 +75,7 @@ export function SettingsPage() {
               {
                 key: "syncSiblings" as const,
                 label: "Sync pack-size variations",
-                hint: "Update larger unit packs proportionally (e.g. 5 → 10 → 20 units).",
+                hint: "Update larger unit packs proportionally.",
               },
               {
                 key: "syncFbm" as const,
@@ -117,26 +114,18 @@ export function SettingsPage() {
 
         <section className="panel p-6">
           <h2 className="text-sm font-semibold text-ink">FBM discount</h2>
-          <p className="mt-1 text-sm text-ink-muted">
-            FBM price = FBA price × (1 − discount)
-          </p>
+          <p className="mt-1 text-sm text-ink-muted">FBM price = FBA price × (1 − discount)</p>
           <div className="mt-4">
             <input
               type="range"
               min={0}
               max={30}
               value={Math.round(settings.fbmDiscount * 100)}
-              onChange={(e) =>
-                setSettings({ fbmDiscount: Number(e.target.value) / 100 })
-              }
+              onChange={(e) => setSettings({ fbmDiscount: Number(e.target.value) / 100 })}
               className="w-full"
             />
             <div className="mt-2 text-2xl font-semibold text-ink">
               {Math.round(settings.fbmDiscount * 100)}% off FBA
-            </div>
-            <div className="mt-1 text-sm text-ink-muted">
-              Example: FBA €32.99 → FBM €
-              {(32.99 * (1 - settings.fbmDiscount)).toFixed(2)}
             </div>
           </div>
         </section>

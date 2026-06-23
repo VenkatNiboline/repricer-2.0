@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_current_user_id, require_user_id
+from api.auth import get_current_user_id, optional_user_id, require_admin
 from supabase_store import get_app_settings, is_configured, update_app_settings
 
 router = APIRouter()
@@ -34,7 +34,7 @@ class AppSettingsIn(BaseModel):
 
 
 @router.get("/app-settings", response_model=AppSettingsOut)
-def read_settings(user_id: Optional[str] = Depends(get_current_user_id)):
+def read_settings(user_id: Optional[str] = Depends(optional_user_id)):
     _ = user_id
     if not is_configured():
         return AppSettingsOut(
@@ -51,7 +51,7 @@ def read_settings(user_id: Optional[str] = Depends(get_current_user_id)):
 
 
 @router.put("/app-settings", response_model=AppSettingsOut)
-def write_settings(body: AppSettingsIn, user_id: str = Depends(require_user_id)):
+def write_settings(body: AppSettingsIn, user_id: str = Depends(require_admin)):
     _ = user_id
     if not is_configured():
         raise HTTPException(503, "Supabase not configured")

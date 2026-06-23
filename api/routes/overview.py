@@ -1,0 +1,75 @@
+"""Batched overview KPIs."""
+
+import sys
+from pathlib import Path
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+
+ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(ROOT / "lib"))
+
+from api.auth import optional_user_id
+from catalog import catalog_stats, get_catalog_payload
+from supabase_store import is_configured, list_qc_findings, list_sales_daily
+
+router = APIRouter()
+
+
+class OverviewResponse(BaseModel):
+    country: str
+    catalog_total: int
+    catalog_fba: int
+    catalog_fbm: int
+    catalog_synced_at: Optional[str]
+    sales_revenue_7d: float
+    sales_units_7d: int
+    open_qc_critical: int
+    open_qc_warning: int
+    open_qc_total: int
+
+
+@router.get("/overview", response_model=OverviewResponse)
+def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(optional_user_id)):
+    _ = user_id
+    country = country.upper()
+
+    if not is_configured():
+        return OverviewResponse(
+            country=country,
+            catalog_total=0,
+            catalog_fba=0,
+            catalog_fbm=0,
+            sales_revenue_7d=0,
+            sales_units_7d=0,
+            open_qc_critical=0,
+            open_qc_warning=0,
+            open_qc_total=0,
+        )
+
+    try:
+        payload = get_catalog_payload(country, refresh=False)
+        stats = catalog_stats(payload)
+        sales_rows = list_sales_daily(country=country, days=7, limit=5000)
+        revenue = sum(float(r.get("ordered_product_sales_amount") or 0) for r in sales_rows)
+        units = sum(int(r.get("units_ordered") or 0) for r in sales_rows)
+
+        critical = list_qc_findings(resolved=False, severity="critical", limit=500)
+        warning = list_qc_findings(resolved=False, severity="warning", limit=500)
+        all_open = list_qc_findings(resolved=False, limit=500)
+
+        return OverviewResponse(
+            country=country,
+            catalog_total=stats.get("total", 0),
+            catalog_fba=stats.get("fba", 0),
+            catalog_fbm=stats.get("fbm_suffix", 0),
+            catalog_synced_at=stats.get("synced_at"),
+            sales_revenue_7d=round(revenue, 2),
+            sales_units_7d=units,
+            open_qc_critical=len(critical),
+            open_qc_warning=len(warning),
+            open_qc_total=len(all_open),
+        )
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc

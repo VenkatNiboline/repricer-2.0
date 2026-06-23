@@ -10,20 +10,15 @@ from urllib.parse import urlencode
 import requests
 from dotenv import load_dotenv
 
+from env_config import load_env
+
 SCRIPT_DIR = Path(__file__).parent.parent
 ENV_FILE = SCRIPT_DIR / "ENV" / "AmazonCredentials.env"
 
 
 def get_access_token(verbose: bool = False) -> str:
     """Load credentials and return a short-lived SP-API access token."""
-    if not ENV_FILE.exists():
-        error_msg = f"Error: credentials file not found: {ENV_FILE}"
-        if verbose:
-            print(error_msg)
-            sys.exit(1)
-        raise FileNotFoundError(error_msg)
-
-    load_dotenv(ENV_FILE)
+    load_env()
 
     refresh_token = os.getenv("LWA_REFRESH_TOKEN")
     client_id = os.getenv("LWA_CLIENT_ID")

@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).parent.parent.parent
@@ -69,6 +69,8 @@ class PriceUpdateResponse(BaseModel):
     currency: str
     parent_sku: Optional[str]
     results: list[UpdateResultOut]
+    history_saved: bool = True
+    history_error: Optional[str] = None
 
 
 def _validate_patch(client, sku, country, patches, product_type):
@@ -167,10 +169,17 @@ def _bounded_price(sku: str, country: str, price: float) -> float:
     return apply_price_bounds(price, rule)
 
 
+def _bearer_token(authorization: Optional[str]) -> Optional[str]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    return authorization.removeprefix("Bearer ").strip() or None
+
+
 @router.post("/repricer/update", response_model=PriceUpdateResponse)
 def update_price(
     body: PriceUpdateRequest,
     user_id: Optional[str] = Depends(get_current_user_id),
+    authorization: Optional[str] = Header(default=None),
 ):
     country = body.country.upper()
     if country not in MARKETPLACE_IDS:
@@ -260,9 +269,19 @@ def update_price(
             }
         )
 
-    if supabase_configured():
+    history_saved = True
+    history_error = None
+    try:
+        record_price_history(history_entries)
+    except Exception as exc:
+        history_saved = False
+        history_error = str(exc)
+
+    if history_saved and not body.dry_run:
         try:
-            record_price_history(history_entries)
+            from qc.runner import run_after_repricing
+
+            run_after_repricing()
         except Exception:
             pass
 
@@ -271,4 +290,6 @@ def update_price(
         currency=currency,
         parent_sku=parent_sku,
         results=results,
+        history_saved=history_saved,
+        history_error=history_error,
     )

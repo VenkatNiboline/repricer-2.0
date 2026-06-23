@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_current_user_id
+from api.auth import optional_user_id
 from supabase_store import is_configured, list_price_history
 
 router = APIRouter()
@@ -20,7 +20,7 @@ def get_history(
     country: Optional[str] = None,
     sku: Optional[str] = None,
     limit: int = 100,
-    user_id: Optional[str] = Depends(get_current_user_id),
+    user_id: Optional[str] = Depends(optional_user_id),
 ):
     _ = user_id
     if not is_configured():

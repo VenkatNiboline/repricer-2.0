@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import {
   BarChart3,
+  FileSearch,
   History,
   LayoutDashboard,
   List,
@@ -21,6 +22,7 @@ const nav = [
   { to: "/sales", label: "Sales", icon: BarChart3 },
   { to: "/rules", label: "SKU Rules", icon: Shield },
   { to: "/history", label: "History", icon: History },
+  { to: "/submissions", label: "Submissions", icon: FileSearch },
   { to: "/qc", label: "QC", icon: ShieldCheck },
   { to: "/fbm", label: "FBM Catalog", icon: Package },
   { to: "/settings", label: "Settings", icon: Settings },

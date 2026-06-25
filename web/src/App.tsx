@@ -13,6 +13,7 @@ import { SalesDetailPage } from "./pages/SalesDetailPage";
 import { SalesPerformancePage } from "./pages/SalesPerformancePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SkuCatalogPage } from "./pages/SkuCatalogPage";
+import { SubmissionCheckPage } from "./pages/SubmissionCheckPage";
 
 function ProtectedApp() {
   const { user, loading, authConfigured } = useAuth();
@@ -37,6 +38,7 @@ function ProtectedApp() {
         <Route path="/reprice" element={<RepricePage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/history" element={<HistoryPage />} />
+        <Route path="/submissions" element={<SubmissionCheckPage />} />
         <Route path="/fbm" element={<FbmCatalogPage />} />
         <Route path="/sales" element={<SalesPerformancePage />} />
         <Route path="/sales/:sku" element={<SalesDetailPage />} />

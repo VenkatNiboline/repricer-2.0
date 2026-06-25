@@ -10,9 +10,10 @@ from pydantic import BaseModel
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import optional_user_id
-from catalog import catalog_stats, get_catalog_payload
-from supabase_store import is_configured, list_qc_findings, list_sales_daily
+from api.auth import get_access_token, optional_user_id
+from api.errors import raise_http_error
+from catalog import catalog_stats, get_catalog_payload, scan_catalog
+from supabase_store import is_readable, list_qc_findings, list_sales_daily
 
 router = APIRouter()
 
@@ -31,11 +32,15 @@ class OverviewResponse(BaseModel):
 
 
 @router.get("/overview", response_model=OverviewResponse)
-def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(optional_user_id)):
+def get_overview(
+    country: str = Query("DE"),
+    user_id: Optional[str] = Depends(optional_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
+):
     _ = user_id
     country = country.upper()
 
-    if not is_configured():
+    if not is_readable():
         return OverviewResponse(
             country=country,
             catalog_total=0,
@@ -49,15 +54,15 @@ def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(op
         )
 
     try:
-        payload = get_catalog_payload(country, refresh=False)
+        payload = get_catalog_payload(country, refresh=False, access_token=access_token)
         stats = catalog_stats(payload)
-        sales_rows = list_sales_daily(country=country, days=7, limit=5000)
+        sales_rows = list_sales_daily(country=country, days=7, limit=5000, access_token=access_token)
         revenue = sum(float(r.get("ordered_product_sales_amount") or 0) for r in sales_rows)
         units = sum(int(r.get("units_ordered") or 0) for r in sales_rows)
 
-        critical = list_qc_findings(resolved=False, severity="critical", limit=500)
-        warning = list_qc_findings(resolved=False, severity="warning", limit=500)
-        all_open = list_qc_findings(resolved=False, limit=500)
+        critical = list_qc_findings(resolved=False, severity="critical", limit=500, access_token=access_token)
+        warning = list_qc_findings(resolved=False, severity="warning", limit=500, access_token=access_token)
+        all_open = list_qc_findings(resolved=False, limit=500, access_token=access_token)
 
         return OverviewResponse(
             country=country,
@@ -72,4 +77,4 @@ def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(op
             open_qc_total=len(all_open),
         )
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to load overview")

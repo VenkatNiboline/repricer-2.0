@@ -15,7 +15,7 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 import get_access_token
-from env_config import load_env
+from env_config import assert_amazon_api_enabled, load_env
 
 SCRIPT_DIR = Path(__file__).parent.parent
 ENV_FILE = SCRIPT_DIR / "ENV" / "AmazonCredentials.env"
@@ -58,6 +58,7 @@ class AmazonListingClient:
 
     def __init__(self, region: str = "EU"):
         load_env()
+        assert_amazon_api_enabled()
         self.seller_id = os.getenv("SELLER_ID")
         if not self.seller_id:
             raise ValueError("SELLER_ID not configured. Set it in ENV or Vercel environment variables.")
@@ -132,6 +133,7 @@ class AmazonListingClient:
         sku: str,
         marketplace_ids: Optional[List[str]] = None,
         countries: Optional[List[str]] = None,
+        included_data: str = "summaries,attributes,offers,issues",
     ) -> Dict[str, Any]:
         if marketplace_ids is None:
             marketplace_ids = self._get_marketplace_ids(countries)
@@ -139,7 +141,7 @@ class AmazonListingClient:
         url = f"{self.base_url}/listings/2021-08-01/items/{self.seller_id}/{sku}"
         params = {
             "marketplaceIds": ",".join(marketplace_ids),
-            "includedData": "summaries,attributes,offers,issues",
+            "includedData": included_data,
         }
 
         try:

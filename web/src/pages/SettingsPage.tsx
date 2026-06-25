@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { api } from "../api/client";
 import { Layout } from "../components/Layout";
 import { useSettings } from "../components/SettingsProvider";
@@ -6,12 +7,50 @@ import { useAuth } from "../components/AuthProvider";
 
 export function SettingsPage() {
   const { settings, setSettings, dbSynced, dbError } = useSettings();
-  const { authConfigured } = useAuth();
+  const { authConfigured, user } = useAuth();
   const [marketplaces, setMarketplaces] = useState<{ code: string; currency: string }[]>([]);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordMessage, setPasswordMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api.marketplaces().then(setMarketplaces).catch(() => setMarketplaces([]));
   }, []);
+
+  async function handlePasswordChange(e: FormEvent) {
+    e.preventDefault();
+    setPasswordError(null);
+    setPasswordMessage(null);
+
+    if (newPassword.length < 8) {
+      setPasswordError("New password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError("New passwords do not match.");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPasswordError("New password must be different from the current password.");
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMessage("Password updated successfully.");
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Password update failed");
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
 
   return (
     <Layout
@@ -111,6 +150,74 @@ export function SettingsPage() {
             ))}
           </div>
         </section>
+
+        {authConfigured && user && (
+          <section className="panel p-6">
+            <h2 className="text-sm font-semibold text-ink">Password</h2>
+            <p className="mt-1 text-sm text-ink-muted">
+              Signed in as <span className="font-medium text-ink">{user.email}</span>
+            </p>
+            <form onSubmit={handlePasswordChange} className="mt-4 space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                  Current password
+                </label>
+                <input
+                  className="input-field"
+                  type="password"
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                  New password
+                </label>
+                <input
+                  className="input-field"
+                  type="password"
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-ink-muted">
+                  Confirm new password
+                </label>
+                <input
+                  className="input-field"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  minLength={8}
+                  required
+                />
+              </div>
+              <button type="submit" className="btn-primary" disabled={passwordLoading}>
+                {passwordLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Updating…
+                  </>
+                ) : (
+                  "Update password"
+                )}
+              </button>
+              {passwordError && (
+                <p className="text-sm text-red-600">{passwordError}</p>
+              )}
+              {passwordMessage && (
+                <p className="text-sm text-emerald-600">{passwordMessage}</p>
+              )}
+            </form>
+          </section>
+        )}
 
         <section className="panel p-6">
           <h2 className="text-sm font-semibold text-ink">FBM discount</h2>

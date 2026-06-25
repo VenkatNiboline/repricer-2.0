@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Copy, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import type { PriceHistoryRow } from "../api/client";
 import { api } from "../api/client";
 import { Badge } from "../components/Badge";
@@ -31,8 +32,16 @@ export function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  async function copySubmissionId(id: string) {
+    await navigator.clipboard.writeText(id);
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId(null), 2000);
+  }
+
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const data = await api.getHistory(settings.country);
@@ -41,13 +50,31 @@ export function HistoryPage() {
       setRows([]);
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [settings.country]);
+
+  const hasPendingReflection = rows.some(
+    (row) => row.reflection_status === "pending" && row.pushed && !row.dry_run
+  );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!hasPendingReflection) return;
+    async function pollReflections() {
+      try {
+        await api.verifyPendingReflections();
+      } catch {
+        /* cron or next interval will retry */
+      }
+      await load(true);
+    }
+    const timer = window.setInterval(pollReflections, 60_000);
+    return () => window.clearInterval(timer);
+  }, [hasPendingReflection, load]);
 
   useEffect(() => {
     function onVisible() {
@@ -69,9 +96,9 @@ export function HistoryPage() {
   return (
     <Layout
       title="Price History"
-      subtitle="Audit log of every repricing action."
+      subtitle="Audit log of every repricing action. Pending reflections are rechecked every minute."
       actions={
-        <button className="btn-secondary" onClick={load} disabled={loading}>
+        <button className="btn-secondary" onClick={() => load()} disabled={loading}>
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Refresh
         </button>
@@ -90,7 +117,7 @@ export function HistoryPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px] text-left text-sm">
+            <table className="w-full min-w-[1280px] text-left text-sm">
               <thead className="bg-surface-subtle text-xs font-medium text-ink-muted">
                 <tr>
                   <th className="px-6 py-3">When</th>
@@ -100,6 +127,7 @@ export function HistoryPage() {
                   <th className="px-6 py-3">New</th>
                   <th className="px-6 py-3">Reflection</th>
                   <th className="px-6 py-3">Verified</th>
+                  <th className="px-6 py-3">Submission ID</th>
                   <th className="px-6 py-3" />
                 </tr>
               </thead>
@@ -123,6 +151,38 @@ export function HistoryPage() {
                         ? formatPrice(row.verified_price, row.currency)
                         : "—"}
                     </td>
+                    <td className="max-w-[220px] px-6 py-3.5">
+                      {row.submission_id ? (
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="truncate font-mono text-xs text-ink-muted"
+                            title={row.submission_id}
+                          >
+                            {row.submission_id}
+                          </span>
+                          <button
+                            type="button"
+                            className="shrink-0 rounded p-1 text-ink-muted hover:bg-surface-subtle hover:text-ink"
+                            title="Copy submission ID"
+                            onClick={() => copySubmissionId(row.submission_id!)}
+                          >
+                            <Copy className="h-3.5 w-3.5" />
+                          </button>
+                          <Link
+                            to={`/submissions?id=${encodeURIComponent(row.submission_id)}&sku=${encodeURIComponent(row.sku)}`}
+                            className="shrink-0 rounded p-1 text-ink-muted hover:bg-surface-subtle hover:text-ink"
+                            title="Check submission JSON"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                          {copiedId === row.submission_id && (
+                            <span className="text-[10px] text-emerald-600">Copied</span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-ink-muted">—</span>
+                      )}
+                    </td>
                     <td className="px-6 py-3.5">
                       {row.reflection_status === "pending" && (
                         <button className="text-xs text-ink-muted hover:text-ink" onClick={() => recheck(row)}>
@@ -134,7 +194,7 @@ export function HistoryPage() {
                 ))}
                 {!rows.length && (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-ink-muted">
+                    <td colSpan={9} className="px-6 py-12 text-center text-ink-muted">
                       No price changes recorded yet.
                     </td>
                   </tr>

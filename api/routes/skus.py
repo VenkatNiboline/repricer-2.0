@@ -21,7 +21,10 @@ from fulfillment_pairs import (
 )
 from price import currency_for_country, extract_current_price, marketplace_id_for_country
 from catalog import catalog_stats, get_catalog_payload, scan_catalog
-from api.auth import get_current_user_id
+from api.auth import get_access_token, require_user_id
+from api.errors import raise_http_error
+from env_config import AMAZON_DISABLED_MESSAGE, AmazonApiDisabledError, amazon_api_enabled
+from supabase_store import get_catalog_row, is_readable
 
 from variations import compute_linked_prices, fetch_variation_family
 
@@ -80,20 +83,76 @@ def list_marketplaces():
 
 
 @router.get("/skus/{sku}", response_model=SkuSummary)
-def get_sku(sku: str, country: str = Query("DE"), region: str = Query("EU")):
+def get_sku(
+    sku: str,
+    country: str = Query("DE"),
+    region: str = Query("EU"),
+    live: bool = Query(True, description="Read live price from Amazon (recommended)"),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
+):
+    _ = user_id
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
 
-    marketplace_id = marketplace_id_for_country(country)
     currency = currency_for_country(country)
+    marketplace_id = marketplace_id_for_country(country)
+
+    if live:
+        try:
+            client = AmazonListingClient(region=region)
+            listing = client.get_listing(sku, countries=[country])
+            fulfillment = classify_fulfillment(sku, listing, marketplace_id)
+            price = extract_current_price(listing, marketplace_id)
+            fbm_pair = fbm_counterpart_exists(
+                client, fba_sku_for(sku) if is_fbm_sku(sku) else sku, country
+            )
+            parent_sku = None
+            try:
+                parent_sku, _ = fetch_variation_family(client, sku, country)
+            except Exception:
+                pass
+            return SkuSummary(
+                sku=sku,
+                fulfillment=fulfillment,
+                price=price,
+                currency=currency,
+                fba_pair=fba_sku_for(sku) if is_fbm_sku(sku) else sku,
+                fbm_pair=fbm_pair,
+                parent_sku=parent_sku,
+            )
+        except AmazonApiDisabledError:
+            pass
+        except Exception:
+            pass
+
+    if is_readable():
+        try:
+            row = get_catalog_row(country, sku, access_token=access_token)
+            if row:
+                catalog_price = row.get("price")
+                return SkuSummary(
+                    sku=row["sku"],
+                    fulfillment=row.get("fulfillment", "UNKNOWN"),
+                    price=float(catalog_price) if catalog_price is not None else None,
+                    currency=row.get("currency") or currency,
+                    fba_pair=row.get("fba_pair") or row["sku"],
+                    fbm_pair=None,
+                    parent_sku=row.get("parent_sku"),
+                )
+        except RuntimeError:
+            pass
+
+    if not amazon_api_enabled():
+        raise HTTPException(503, AMAZON_DISABLED_MESSAGE)
 
     try:
         client = AmazonListingClient(region=region)
         listing = client.get_listing(sku, countries=[country])
         parent_sku, members = fetch_variation_family(client, sku, country)
     except Exception as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise_http_error(exc, status_code=404, client_message="SKU not found")
 
     fulfillment = classify_fulfillment(sku, listing, marketplace_id)
     price = extract_current_price(listing, marketplace_id)
@@ -122,7 +181,9 @@ def preview_price_update(
     sync_siblings: bool = Query(True),
     sync_fbm: bool = Query(True),
     fbm_discount: float = Query(DEFAULT_FBM_DISCOUNT, ge=0, lt=1),
+    user_id: str = Depends(require_user_id),
 ):
+    _ = user_id
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
@@ -132,7 +193,7 @@ def preview_price_update(
         parent_sku, members = fetch_variation_family(client, sku, country)
         fbm_pair = fbm_counterpart_exists(client, sku, country) if not is_fbm_sku(sku) else None
     except Exception as exc:
-        raise HTTPException(404, str(exc)) from exc
+        raise_http_error(exc, status_code=404, client_message="SKU not found")
 
     currency = currency_for_country(country)
     linked = []
@@ -198,8 +259,18 @@ class CatalogRow(BaseModel):
     fulfillment: str
     price: Optional[float]
     currency: str
-    fba_pair: str
-    is_fbm: bool
+    fba_pair: str = ""
+    is_fbm: bool = False
+
+
+def _as_catalog_row(row: dict) -> CatalogRow:
+    return CatalogRow(
+        **{
+            **row,
+            "fba_pair": row.get("fba_pair") or row.get("sku") or "",
+            "is_fbm": bool(row.get("is_fbm")),
+        }
+    )
 
 
 class CatalogStats(BaseModel):
@@ -225,11 +296,18 @@ def get_catalog_stats(
     country: str = Query("DE"),
     region: str = Query("EU"),
     refresh: bool = Query(False),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
 ):
+    _ = user_id
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
-    payload = get_catalog_payload(country, refresh=False) if not refresh else scan_catalog(country, region, refresh=True)
+    payload = (
+        get_catalog_payload(country, refresh=False, access_token=access_token)
+        if not refresh
+        else scan_catalog(country, region, refresh=True, access_token=access_token)
+    )
     return CatalogStats(**catalog_stats(payload))
 
 
@@ -237,12 +315,18 @@ def get_catalog_stats(
 def sync_catalog_endpoint(
     country: str = Query("DE"),
     region: str = Query("EU"),
-    user_id: Optional[str] = Depends(get_current_user_id),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
-    payload = scan_catalog(country, region, refresh=True, created_by=user_id)
+    try:
+        payload = scan_catalog(
+            country, region, refresh=True, created_by=user_id, access_token=access_token
+        )
+    except AmazonApiDisabledError as exc:
+        raise HTTPException(503, str(exc)) from exc
     rows = payload.get("rows") or []
     stats = catalog_stats(payload)
     return CatalogResponse(
@@ -251,7 +335,7 @@ def sync_catalog_endpoint(
         source=payload.get("source", "unknown"),
         count=len(rows),
         stats=CatalogStats(**stats),
-        rows=[CatalogRow(**row) for row in rows],
+        rows=[_as_catalog_row(row) for row in rows],
     )
 
 
@@ -261,16 +345,21 @@ def get_catalog(
     region: str = Query("EU"),
     refresh: bool = Query(False),
     fulfillment: Optional[str] = Query(None, description="Filter: FBA, FBM, or ALL"),
-    user_id: Optional[str] = Depends(get_current_user_id),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
 
     if refresh:
-        payload = scan_catalog(country, region, refresh=True, created_by=user_id)
+        payload = scan_catalog(
+            country, region, refresh=True, created_by=user_id, access_token=access_token
+        )
     else:
-        payload = get_catalog_payload(country, fulfillment=fulfillment, refresh=False)
+        payload = get_catalog_payload(
+            country, fulfillment=fulfillment, refresh=False, access_token=access_token
+        )
 
     rows = payload.get("rows") or []
     if fulfillment and fulfillment.upper() != "ALL":
@@ -283,7 +372,7 @@ def get_catalog(
         source=payload.get("source", "unknown"),
         count=len(rows),
         stats=CatalogStats(**stats),
-        rows=[CatalogRow(**row) for row in rows],
+        rows=[_as_catalog_row(row) for row in rows],
     )
 
 
@@ -293,12 +382,15 @@ def list_fbm_skus(
     region: str = Query("EU"),
     suffix_only: bool = Query(True),
     refresh: bool = Query(False),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
 ):
+    _ = user_id
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
 
-    payload = scan_catalog(country, region, refresh=refresh)
+    payload = scan_catalog(country, region, refresh=refresh, access_token=access_token)
     rows: list[FbmSkuRow] = []
     for row in payload.get("rows") or []:
         if row.get("fulfillment") != "FBM":

@@ -1,20 +1,23 @@
-"""CSRF validation and simple rate limiting."""
+"""CSRF validation and distributed rate limiting."""
 
+import logging
 import os
-import time
-from collections import defaultdict
-from threading import Lock
-from typing import Callable, Dict, List, Tuple
+import sys
+from pathlib import Path
+from typing import Callable
 
 from fastapi import HTTPException, Request, Response
+
+ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(ROOT / "lib"))
+
+from supabase_store import is_configured  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 CSRF_COOKIE = "repricer_csrf"
 CSRF_HEADER = "x-csrf-token"
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-# In-memory rate limit buckets: (key, route_group) -> [timestamps]
-_rate_lock = Lock()
-_rate_buckets: Dict[Tuple[str, str], List[float]] = defaultdict(list)
 
 RATE_LIMITS = {
     "auth_login": (5, 900),
@@ -46,13 +49,20 @@ def validate_csrf(request: Request) -> None:
     path = request.url.path
     if path.startswith("/api/auth/login") or path.startswith("/api/auth/signup"):
         return
-    if path.endswith("/sync-cron"):
+    if path.endswith("/sync-cron") or path.endswith("/verify-pending-cron"):
         return
 
     cookie_token = request.cookies.get(CSRF_COOKIE)
     header_token = request.headers.get(CSRF_HEADER)
     if not cookie_token or not header_token or cookie_token != header_token:
         raise HTTPException(403, "CSRF validation failed")
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _rate_group(path: str) -> str:
@@ -65,22 +75,41 @@ def _rate_group(path: str) -> str:
     return "default_mutate"
 
 
+def _rate_limit_allowed(rate_key: str, max_calls: int, window_sec: int) -> bool:
+    if not is_configured():
+        return True
+    try:
+        from supabase_store import get_client
+
+        client = get_client(admin=True)
+        result = client.rpc(
+            "rate_limit_check",
+            {
+                "p_key": rate_key,
+                "p_max": max_calls,
+                "p_window_secs": window_sec,
+            },
+        ).execute()
+        data = result.data
+        if isinstance(data, bool):
+            return data
+        if isinstance(data, list) and data:
+            return bool(data[0])
+        return bool(data)
+    except Exception:
+        logger.exception("Rate limit check failed for key=%s; allowing request", rate_key)
+        return True
+
+
 def check_rate_limit(request: Request) -> None:
     if request.method not in MUTATING_METHODS:
         return
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_ip(request)
     group = _rate_group(request.url.path)
     max_calls, window_sec = RATE_LIMITS.get(group, RATE_LIMITS["default_mutate"])
-    key = (client_ip, group)
-    now = time.time()
-    cutoff = now - window_sec
-
-    with _rate_lock:
-        bucket = [t for t in _rate_buckets[key] if t > cutoff]
-        if len(bucket) >= max_calls:
-            raise HTTPException(429, "Rate limit exceeded")
-        bucket.append(now)
-        _rate_buckets[key] = bucket
+    rate_key = f"{client_ip}:{group}"
+    if not _rate_limit_allowed(rate_key, max_calls, window_sec):
+        raise HTTPException(429, "Rate limit exceeded")
 
 
 async def security_middleware(request: Request, call_next: Callable):

@@ -12,9 +12,10 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from api.middleware.security import security_middleware  # noqa: E402
-from api.routes import auth, history, overview, qc, repricer, rules, sales, settings_db, skus  # noqa: E402
+from api.routes import auth, history, overview, qc, repricer, rules, sales, settings_db, skus, submissions  # noqa: E402
 from api.auth import auth_configured  # noqa: E402
-from supabase_store import is_configured  # noqa: E402
+from env_config import amazon_api_enabled  # noqa: E402
+from supabase_store import is_configured, is_readable  # noqa: E402
 
 app = FastAPI(title="Amazon Repricer", version="2.1.0")
 
@@ -30,7 +31,7 @@ if vercel_url:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=r"https://repricer-2-0-[a-z0-9-]+\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,6 +56,7 @@ app.include_router(skus.router, prefix="/api", tags=["skus"])
 app.include_router(repricer.router, prefix="/api", tags=["repricer"])
 app.include_router(rules.router, prefix="/api", tags=["rules"])
 app.include_router(history.router, prefix="/api", tags=["history"])
+app.include_router(submissions.router, prefix="/api", tags=["submissions"])
 app.include_router(settings_db.router, prefix="/api", tags=["settings"])
 app.include_router(qc.router, prefix="/api", tags=["qc"])
 app.include_router(sales.router, prefix="/api", tags=["sales"])
@@ -65,6 +67,8 @@ def health():
     return {
         "status": "ok",
         "auth_configured": auth_configured(),
+        "amazon_api_enabled": amazon_api_enabled(),
         "history_write_ready": is_configured(),
-        "db_configured": is_configured(),
+        "db_configured": is_configured() or is_readable(),
+        "db_write_ready": is_configured(),
     }

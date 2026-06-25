@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import requests
 from dotenv import load_dotenv
 
-from env_config import load_env
+from env_config import assert_amazon_api_enabled, load_env
 
 SCRIPT_DIR = Path(__file__).parent.parent
 ENV_FILE = SCRIPT_DIR / "ENV" / "AmazonCredentials.env"
@@ -19,6 +19,7 @@ ENV_FILE = SCRIPT_DIR / "ENV" / "AmazonCredentials.env"
 def get_access_token(verbose: bool = False) -> str:
     """Load credentials and return a short-lived SP-API access token."""
     load_env()
+    assert_amazon_api_enabled()
 
     refresh_token = os.getenv("LWA_REFRESH_TOKEN")
     client_id = os.getenv("LWA_CLIENT_ID")

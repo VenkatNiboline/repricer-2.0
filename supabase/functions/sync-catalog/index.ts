@@ -18,6 +18,11 @@ function json(data: unknown, status = 200) {
   });
 }
 
+function amazonApiEnabled(): boolean {
+  const raw = (Deno.env.get("AMAZON_API_ENABLED") ?? "true").trim().toLowerCase();
+  return !["false", "0", "no", "off"].includes(raw);
+}
+
 async function authorize(req: Request): Promise<{ ok: boolean; source: string }> {
   const cronSecret = Deno.env.get("CRON_SECRET");
   const providedSecret = req.headers.get("x-cron-secret");
@@ -95,6 +100,13 @@ Deno.serve(async (req) => {
   const auth = await authorize(req);
   if (!auth.ok) {
     return unauthorized("Sign in required or invalid cron secret");
+  }
+
+  if (!amazonApiEnabled()) {
+    return json(
+      { ok: false, error: "Amazon SP-API access is disabled (AMAZON_API_ENABLED=false)" },
+      503,
+    );
   }
 
   const sellerId = Deno.env.get("SELLER_ID");

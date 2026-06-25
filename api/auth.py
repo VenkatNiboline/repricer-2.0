@@ -36,6 +36,13 @@ def _token_from_request(
     return None
 
 
+def get_access_token(
+    authorization: Optional[str] = Header(default=None),
+    repricer_at: Optional[str] = Cookie(default=None),
+) -> Optional[str]:
+    return _token_from_request(authorization, repricer_at)
+
+
 def get_current_user_id(
     request: Request,
     authorization: Optional[str] = Header(default=None),
@@ -80,7 +87,8 @@ def require_admin(
     user_id = require_user_id(request, authorization, repricer_at)
     from supabase_store import get_profile
 
-    profile = get_profile(user_id)
+    token = _token_from_request(authorization, repricer_at)
+    profile = get_profile(user_id, access_token=token)
     if not profile or profile.get("role") != "admin":
         raise HTTPException(403, "Admin access required")
     return user_id

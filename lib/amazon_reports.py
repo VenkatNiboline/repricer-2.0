@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from amazon_listing import SP_API_BASE_URLS
+from env_config import assert_amazon_api_enabled
 from get_access_token import get_access_token
 from price import marketplace_id_for_country
 
@@ -24,6 +25,7 @@ def _base_url(region: str = "EU") -> str:
 
 
 def _headers() -> Dict[str, str]:
+    assert_amazon_api_enabled()
     return {
         "x-amz-access-token": get_access_token(),
         "Content-Type": "application/json",

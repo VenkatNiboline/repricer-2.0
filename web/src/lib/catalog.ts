@@ -46,7 +46,10 @@ export async function invokeCatalogSyncAll(
 export async function checkApiHealth() {
   try {
     const health = await api.health();
-    return health.db_configured;
+    return (
+      health.status === "ok" &&
+      (health.db_configured || health.auth_configured)
+    );
   } catch {
     return false;
   }

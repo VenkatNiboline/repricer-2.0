@@ -1,0 +1,3 @@
+data/cache/
+ENV/AmazonCredentials.env
+.env

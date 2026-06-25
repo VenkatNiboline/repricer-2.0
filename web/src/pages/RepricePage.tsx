@@ -1,4 +1,4 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { CheckCircle2, Loader2, Search, TriangleAlert } from "lucide-react";
 import { api, PriceUpdateResponse, VariationPreview } from "../api/client";
 import { Badge } from "../components/Badge";
@@ -10,10 +10,44 @@ export function RepricePage() {
   const { settings } = useSettings();
   const [sku, setSku] = useState("");
   const [price, setPrice] = useState("");
+  const [currentPrice, setCurrentPrice] = useState<number | null>(null);
+  const [currentCurrency, setCurrentCurrency] = useState("EUR");
+  const [skuLookupLoading, setSkuLookupLoading] = useState(false);
+  const [skuLookupError, setSkuLookupError] = useState<string | null>(null);
   const [preview, setPreview] = useState<VariationPreview | null>(null);
   const [result, setResult] = useState<PriceUpdateResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const trimmed = sku.trim();
+    if (!trimmed) {
+      setCurrentPrice(null);
+      setSkuLookupError(null);
+      setSkuLookupLoading(false);
+      return;
+    }
+
+    setSkuLookupLoading(true);
+    setSkuLookupError(null);
+
+    const timer = window.setTimeout(() => {
+      api
+        .getSku(trimmed, settings.country)
+        .then((data) => {
+          setCurrentPrice(data.price);
+          setCurrentCurrency(data.currency);
+          setSkuLookupError(data.price == null ? "SKU found, but no price in catalog." : null);
+        })
+        .catch(() => {
+          setCurrentPrice(null);
+          setSkuLookupError("SKU not found in catalog.");
+        })
+        .finally(() => setSkuLookupLoading(false));
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [sku, settings.country]);
 
   async function handlePreview(e?: FormEvent) {
     e?.preventDefault();
@@ -44,6 +78,14 @@ export function RepricePage() {
     try {
       const data = await api.updatePrice(sku.trim(), numericPrice, settings, dryRun);
       setResult(data);
+      if (!dryRun) {
+        const primary = data.results.find((row) => row.link_kind === "primary");
+        if (primary?.verified_price != null) {
+          setCurrentPrice(primary.verified_price);
+        } else if (primary?.pushed) {
+          setCurrentPrice(primary.target_price);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Update failed");
     } finally {
@@ -74,9 +116,33 @@ export function RepricePage() {
                   className="input-field pl-9"
                   placeholder="e.g. 7770531"
                   value={sku}
-                  onChange={(e) => setSku(e.target.value)}
+                  onChange={(e) => {
+                    setSku(e.target.value);
+                    setPreview(null);
+                    setResult(null);
+                  }}
                 />
               </div>
+              {sku.trim() && (
+                <p className="mt-1.5 text-xs text-ink-muted">
+                  {skuLookupLoading ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Looking up current price…
+                    </span>
+                  ) : skuLookupError ? (
+                    <span className="text-amber-700">{skuLookupError}</span>
+                  ) : (
+                    <>
+                      Current price{" "}
+                      <span className="text-ink-faint">(live Amazon)</span>:{" "}
+                      <span className="font-medium text-ink">
+                        {formatPrice(currentPrice, currentCurrency)}
+                      </span>
+                    </>
+                  )}
+                </p>
+              )}
             </div>
 
             <div>
@@ -226,7 +292,7 @@ export function RepricePage() {
           {result && (
             <div className="panel p-6">
               <h2 className="text-sm font-semibold text-ink">Results</h2>
-              {result.history_saved === false && (
+              {result.history_saved === false && result.results.some((row) => row.pushed) && (
                 <div className="mt-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                   <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
                   <span>

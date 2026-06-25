@@ -154,6 +154,17 @@ export interface PriceHistoryRow {
   created_at: string;
 }
 
+export interface SubmissionLookupResponse {
+  submission_id: string;
+  sku: string;
+  country: string;
+  currency: string;
+  history?: PriceHistoryRow | null;
+  current_price: number | null;
+  listing: Record<string, unknown>;
+  note: string;
+}
+
 export interface AppSettings {
   default_country: string;
   default_region: string;
@@ -176,6 +187,7 @@ export interface HealthStatus {
   auth_configured: boolean;
   history_write_ready: boolean;
   db_configured: boolean;
+  db_write_ready?: boolean;
 }
 
 export interface QcFinding {
@@ -290,11 +302,21 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }),
   csrf: () => request<{ csrf_token: string }>("/api/auth/csrf"),
   overview: (country: string) => request<OverviewData>(`/api/overview?country=${country}`),
   marketplaces: () => request<Marketplace[]>("/api/marketplaces"),
-  getSku: (sku: string, country: string) =>
-    request<SkuSummary>(`/api/skus/${encodeURIComponent(sku)}?country=${country}`),
+  getSku: (sku: string, country: string, live = true) =>
+    request<SkuSummary>(
+      `/api/skus/${encodeURIComponent(sku)}?country=${country}&live=${live}`
+    ),
   preview: (sku: string, price: number, settings: RepricerSettings) => {
     const params = new URLSearchParams({
       price: String(price),
@@ -371,6 +393,25 @@ export const api = {
   },
   verifyHistory: (historyId: number) =>
     request<Record<string, unknown>>(`/api/history/${historyId}/verify`, { method: "POST" }),
+  verifyPendingReflections: () =>
+    request<{ checked: number; reflected: number; results: unknown[] }>(
+      "/api/history/verify-pending",
+      { method: "POST" }
+    ),
+  lookupSubmission: (
+    submissionId: string,
+    country: string,
+    region = "EU",
+    sku?: string
+  ) => {
+    const params = new URLSearchParams({
+      submission_id: submissionId,
+      country,
+      region,
+    });
+    if (sku) params.set("sku", sku);
+    return request<SubmissionLookupResponse>(`/api/submissions/lookup?${params}`);
+  },
   getAppSettings: () => request<AppSettings>("/api/app-settings"),
   saveAppSettings: (settings: AppSettingsInput) =>
     request<AppSettings>("/api/app-settings", {

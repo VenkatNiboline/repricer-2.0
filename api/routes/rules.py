@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_current_user_id, optional_user_id, require_admin, require_user_id
-from supabase_store import delete_sku_rule, is_configured, list_sku_rules, upsert_sku_rule
+from api.auth import get_access_token, optional_user_id, require_admin, require_user_id
+from api.errors import raise_http_error
+from supabase_store import delete_sku_rule, is_readable, is_configured, list_sku_rules, upsert_sku_rule
 
 router = APIRouter()
 
@@ -35,19 +36,16 @@ class SkuRuleOut(SkuRuleIn):
 @router.get("/rules", response_model=list[SkuRuleOut])
 def get_rules(
     country: Optional[str] = None,
-    user_id: Optional[str] = Depends(get_current_user_id),
+    user_id: str = Depends(require_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
 ):
-    from api.auth import auth_configured
-
-    if auth_configured() and not user_id:
-        raise HTTPException(401, "Authentication required")
     _ = user_id
-    if not is_configured():
+    if not is_readable():
         return []
     try:
-        return list_sku_rules(country=country)
+        return list_sku_rules(country=country, access_token=access_token)
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to load rules")
 
 
 @router.put("/rules", response_model=SkuRuleOut)
@@ -57,7 +55,7 @@ def save_rule(body: SkuRuleIn, user_id: str = Depends(require_admin)):
     try:
         return upsert_sku_rule(body.model_dump(), updated_by=user_id)
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to save rule")
 
 
 @router.delete("/rules/{sku}")
@@ -69,4 +67,4 @@ def remove_rule(sku: str, country: str = "DE", user_id: str = Depends(require_ad
         delete_sku_rule(sku, country)
         return {"ok": True}
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to delete rule")

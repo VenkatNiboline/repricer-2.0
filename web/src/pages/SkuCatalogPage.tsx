@@ -3,6 +3,7 @@ import { Download, Loader2, RefreshCw, Search } from "lucide-react";
 import type { CatalogRow } from "../api/client";
 import { Badge } from "../components/Badge";
 import { Layout } from "../components/Layout";
+import { useAuth } from "../components/AuthProvider";
 import { useSettings } from "../components/SettingsProvider";
 import { fetchCatalog, invokeCatalogSync } from "../lib/catalog";
 import { marketplaceForCountry } from "../lib/marketplaces";
@@ -10,6 +11,7 @@ import { formatPrice } from "../lib/utils";
 
 export function SkuCatalogPage() {
   const { settings } = useSettings();
+  const { user, authConfigured } = useAuth();
   const [rows, setRows] = useState<CatalogRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -182,7 +184,9 @@ export function SkuCatalogPage() {
                 {!filtered.length && (
                   <tr>
                     <td colSpan={6} className="px-6 py-12 text-center text-ink-muted">
-                      No SKUs for {settings.country} yet. Click &quot;Sync from Amazon&quot; to populate this marketplace.
+                      {authConfigured && !user
+                        ? "Sign in to load the catalog from Supabase."
+                        : `No SKUs for ${settings.country} yet. Click "Sync from Amazon" to populate this marketplace.`}
                     </td>
                   </tr>
                 )}

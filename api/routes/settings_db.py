@@ -10,8 +10,9 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_current_user_id, optional_user_id, require_admin
-from supabase_store import get_app_settings, is_configured, update_app_settings
+from api.auth import get_access_token, optional_user_id, require_admin
+from api.errors import raise_http_error
+from supabase_store import get_app_settings, is_readable, is_configured, update_app_settings
 
 router = APIRouter()
 
@@ -34,9 +35,12 @@ class AppSettingsIn(BaseModel):
 
 
 @router.get("/app-settings", response_model=AppSettingsOut)
-def read_settings(user_id: Optional[str] = Depends(optional_user_id)):
+def read_settings(
+    user_id: Optional[str] = Depends(optional_user_id),
+    access_token: Optional[str] = Depends(get_access_token),
+):
     _ = user_id
-    if not is_configured():
+    if not is_readable():
         return AppSettingsOut(
             default_country="DE",
             default_region="EU",
@@ -45,9 +49,9 @@ def read_settings(user_id: Optional[str] = Depends(optional_user_id)):
             sync_fbm=True,
         )
     try:
-        return get_app_settings()
+        return get_app_settings(access_token=access_token)
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to load settings")
 
 
 @router.put("/app-settings", response_model=AppSettingsOut)
@@ -58,4 +62,4 @@ def write_settings(body: AppSettingsIn, user_id: str = Depends(require_admin)):
     try:
         return update_app_settings(body.model_dump())
     except Exception as exc:
-        raise HTTPException(500, str(exc)) from exc
+        raise_http_error(exc, client_message="Failed to save settings")

@@ -24,7 +24,42 @@ Internal pricing team / admin users with Amazon SP-API access.
 
 ---
 
-## 2. Architecture (High-Level)
+## 2. New Features in This Release
+
+The following capabilities were added on top of the core repricing tool. **Prioritize these in regression testing.**
+
+| Feature | Route / API | What it does |
+|---------|-------------|--------------|
+| **Overview dashboard (batched KPIs)** | `/` · `GET /api/overview` | Single call loads catalog total, 7-day sales revenue/units, and open QC alert counts (critical + warning) |
+| **Sales performance** | `/sales` · `GET /api/sales/summary` | 7-day revenue, units, and row count from `sales_daily` |
+| **Sales detail (per SKU)** | `/sales/:sku` · `GET /api/sales?sku=` | 30-day daily breakdown: revenue, units, sessions, buy box % |
+| **Sales ETL from Amazon** | `POST /api/sales/sync` | Fetches Sales & Traffic report, upserts `sales_daily`, runs features engine + QC |
+| **Pricing features engine** | `lib/features_engine.py` | Computes `units_7d`, `revenue_7d`, `buy_box_avg_7d`, `signal_underpriced_high_demand` per SKU |
+| **QC dashboard** | `/qc` · `POST /api/qc/run` | Three agents: repricing, data, pricing — findings list with resolve |
+| **Price reflection** | History + `lib/price_reflection.py` | Tracks whether Amazon adopted pushed prices (`pending` → `reflected` / `mismatch` / `timeout`) |
+| **Multi-marketplace (9 EU)** | Header `MarketplaceSelector` | Per-country catalog tables, currency, region; switches context app-wide |
+| **Supabase auth & roles** | Login page · `/api/auth/*` | Cookie-based login; first user = admin; BFF pattern (no keys in browser) |
+| **Per-marketplace catalog DB** | `sku_catalog_{country}` | Separate tables + unified view; cron sync for DE only |
+| **Vercel deployment** | `vercel.json` | SPA + serverless FastAPI in one deployment |
+
+### Post-repricing automation
+
+After every **live** repricer push, the backend automatically:
+
+1. Runs `verify_pending_reflections()` on open history rows
+2. Runs `repricing_qc` agent
+
+### Post-sales-sync automation
+
+After **sales sync** (admin), the backend automatically:
+
+1. Upserts rows into `sales_daily`
+2. Runs `run_features_engine(country)` (up to 100 catalog SKUs)
+3. Runs `data_qc` + `pricing_qc` agents
+
+---
+
+## 3. Architecture (High-Level)
 
 ```
 ┌─────────────┐     /api/*      ┌──────────────┐     SP-API      ┌─────────┐
@@ -54,7 +89,7 @@ Internal pricing team / admin users with Amazon SP-API access.
 
 ---
 
-## 3. User Roles and Authentication
+## 4. User Roles and Authentication
 
 | Role | Permissions |
 |------|-------------|
@@ -84,27 +119,33 @@ The **UI does not hide admin actions**. Non-admins can see buttons like "Save ru
 
 ---
 
-## 4. Pages and Features
+## 5. Pages and Features
 
 | Route | Page | Function |
 |-------|------|----------|
-| `/` | Overview | Dashboard: catalog stats, sync single/all 9 EU marketplaces, API health |
+| `/` | Overview | Batched KPIs (catalog, sales 7d, QC alerts), API health indicator, sync catalog, quick links |
 | `/catalog` | SKU Catalog | Full catalog with search, FBA/FBM filter, sync, CSV export |
 | `/reprice` | Reprice | **Core workflow:** SKU + price → preview → dry-run or live push to Amazon |
-| `/sales` | Sales | 7-day revenue/units, manual sales sync (admin) |
+| `/sales` | Sales Performance | 7-day revenue/units summary, refresh, admin sales sync |
+| `/sales/:sku` | Sales Detail | Per-SKU 30-day table: date, revenue, units, sessions, buy box % |
 | `/rules` | SKU Rules | Min/max, FBM discount, sync flags per SKU (admin writes) |
 | `/history` | History | Price history with reflection status, manual re-verify |
 | `/qc` | QC Dashboard | Open findings, run QC, resolve findings |
 | `/fbm` | FBM Catalog | FBM SKUs only, CSV export |
 | `/settings` | Settings | Marketplace, region, sync flags, FBM discount, dry-run default |
+| (login) | Login | Sign-in / sign-up when auth is configured |
 
-**Global marketplace selector** in the header controls `settings.country` for nearly all pages.
+### Marketplace selector (header)
+
+The **MarketplaceSelector** dropdown in the header sets `settings.country` and `settings.region` for the entire app. Changing marketplace reloads data on Overview, Sales, Catalog, History, Reprice, etc.
+
+**9 options:** DE, FR, IT, ES, NL, BE, PL, SE, UK — each with label and currency shown in the dropdown.
 
 **Auth gate:** When `SUPABASE_URL` + `SUPABASE_ANON_KEY` are set → login required. Without auth → app runs in open local-dev mode.
 
 ---
 
-## 5. Critical Business Rules
+## 6. Critical Business Rules
 
 These rules are **central** to functional testing.
 
@@ -138,7 +179,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 6. Core Workflows (Test Priority)
+## 7. Core Workflows (Test Priority)
 
 ### A. Repricing (highest priority)
 
@@ -184,21 +225,101 @@ These rules are **central** to functional testing.
 - **Recheck** calls `/api/history/{id}/verify`
 - Auto-refresh on tab focus (`visibilitychange`)
 
-### E. Sales
+### E. Overview dashboard
 
-- Summary: 7-day revenue/units
-- Admin: sales sync → Amazon report (poll up to ~10 min), upsert `sales_daily`, features engine, QC
+```
+1. Select marketplace in header (e.g. DE)
+2. Go to / → Overview loads GET /api/overview in one request
+3. Verify KPI cards: Total SKUs, Revenue (7d), Units (7d), QC alerts
+4. QC alerts hint shows "N critical · M warning"
+5. API health dot: green = /api/health OK, red = unreachable
+6. "Sync {country}" triggers catalog sync for current marketplace only
+7. Quick links navigate to /sales, /qc, /history
+```
 
-### F. QC
+**Test cases:**
 
-- **repricing_qc:** stale pending (>30 min), mismatch, timeout, push_failed
-- **data_qc:** missing/stale sales data (>2 days)
-- **pricing_qc:** `signal_underpriced_high_demand` (units ≥ 10, buy_box ≥ 90%)
-- Resolve findings via PATCH
+- Switch marketplace → all KPIs reload for new country
+- No Supabase configured → overview returns zeros (no crash)
+- Catalog synced recently → "Total SKUs" hint shows last sync timestamp
+- Open QC findings exist → QC alerts card reflects `open_qc_total`
+- API down → red health indicator, error on failed overview load
+
+### F. Sales performance & detail
+
+**Sales Performance (`/sales`):**
+
+```
+1. Select marketplace
+2. Page loads GET /api/sales/summary?country=XX
+3. Shows Revenue (7d), Units (7d), Data rows
+4. Admin: "Sync sales (7d)" → POST /api/sales/sync (can take up to ~10 min)
+5. After sync: features engine + data_qc + pricing_qc run automatically
+```
+
+**Sales Detail (`/sales/:sku`):**
+
+```
+1. Navigate directly to /sales/{SKU} (no link from Sales Performance page yet)
+2. Loads GET /api/sales?country=XX&sku={SKU}&days=30
+3. Summary cards: Revenue (30d), Units (30d), Data points (row count)
+4. Table columns: Date, Revenue, Units, Sessions, Buy box %
+5. Empty state: "No sales data for this SKU. Run a sales sync first."
+6. "Back" returns to /sales
+```
+
+**Test cases:**
+
+- Sales sync as admin → rows appear in summary and detail
+- Sales sync as non-admin → **403**
+- SKU with no sales data → empty table + message on detail page
+- Change marketplace on detail page → data reloads for new country
+- Revenue display uses hardcoded `EUR` on detail page — verify for UK (GBP), PL (PLN), SE (SEK)
+- Sessions and buy box % show "—" when null in source data
+
+### G. QC
+
+Three QC agents run via `POST /api/qc/run` (all agents) or automatically after sales sync / live repricing:
+
+**repricing_qc** (`lib/qc/repricing_qc_agent.py`):
+
+| check_id | Severity | Trigger |
+|----------|----------|---------|
+| `reflection_pending_stale` | warning | `reflection_status=pending` and pushed > 30 min ago |
+| `reflection_mismatch` | critical | `reflection_status=mismatch` |
+| `reflection_timeout` | warning | `reflection_status=timeout` |
+| `push_failed` | critical | `pushed=false`, `dry_run=false` |
+
+**data_qc** (`lib/qc/data_qc_agent.py`):
+
+| check_id | Severity | Trigger |
+|----------|----------|---------|
+| `no_sales_data` | info | No rows in `sales_daily` |
+| `stale_data` | warning | Latest sales date older than 2 days |
+| `duplicate_rows` | critical | Duplicate (marketplace, ASIN, date) keys |
+| `missing_sku_mapping` | warning | Sales ASIN not found in catalog |
+| `currency_mismatch` | warning | Sales currency ≠ catalog currency |
+| `negative_metrics` | critical | Negative revenue or units |
+| `null_sales_with_traffic` | warning | Sessions > 0 but no sales/units |
+
+**pricing_qc** (`lib/qc/pricing_qc_agent.py`):
+
+| check_id | Severity | Trigger |
+|----------|----------|---------|
+| `signal_underpriced` | info | `signal_underpriced_high_demand` feature = 1 (units ≥ 10, buy_box_avg ≥ 90%, sessions > 0) |
+
+**QC dashboard UI:**
+
+- Lists unresolved findings (`GET /api/qc/findings?resolved=false`)
+- "Run QC" triggers all three agents
+- "Resolve" per finding → `PATCH /api/qc/findings/{id}`
+- Severity badges: critical, warning, info
+
+**Note:** `config/pricing_features.yaml` defines `signal_overpriced_low_traffic`, but it is **not yet implemented** in the features engine — only `signal_underpriced_high_demand` is computed today.
 
 ---
 
-## 7. Multi-Marketplace Support
+## 8. Multi-Marketplace Support
 
 **9 EU marketplaces:** `DE`, `FR`, `IT`, `ES`, `NL`, `BE`, `PL` (PLN), `SE` (SEK), `UK` (GBP)
 
@@ -208,7 +329,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 8. API Overview
+## 9. API Overview
 
 ### Health
 
@@ -225,6 +346,16 @@ These rules are **central** to functional testing.
 | POST | `/api/auth/login` | Login, sets httpOnly cookies | No |
 | POST | `/api/auth/signup` | Registration | No |
 | POST | `/api/auth/logout` | Clear cookies | No |
+
+### Overview
+
+| Method | Path | Purpose | Auth |
+|--------|------|---------|------|
+| GET | `/api/overview` | Batched KPIs for dashboard (`country` query param) | Optional |
+
+**Response fields:** `country`, `catalog_total`, `catalog_fba`, `catalog_fbm`, `catalog_synced_at`, `sales_revenue_7d`, `sales_units_7d`, `open_qc_critical`, `open_qc_warning`, `open_qc_total`
+
+Returns zeros when Supabase is not configured.
 
 ### SKUs & Catalog
 
@@ -285,7 +416,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 9. Data Model (Key Entities)
+## 10. Data Model (Key Entities)
 
 | Entity | Table | Key fields |
 |--------|-------|------------|
@@ -306,7 +437,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 10. External Integrations
+## 11. External Integrations
 
 ### Amazon SP-API
 
@@ -329,7 +460,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 11. Background Jobs and Scripts
+## 12. Background Jobs and Scripts
 
 | Job / Script | Path | Purpose |
 |--------------|------|---------|
@@ -346,7 +477,7 @@ These rules are **central** to functional testing.
 
 ---
 
-## 12. Test Environment Setup
+## 13. Test Environment Setup
 
 ### Local setup
 
@@ -392,7 +523,7 @@ curl http://127.0.0.1:8000/api/health
 
 ---
 
-## 13. Edge Cases and Complex Logic
+## 14. Edge Cases and Complex Logic
 
 ### Repricing / variations (`lib/variations.py`)
 
@@ -422,7 +553,7 @@ curl http://127.0.0.1:8000/api/health
 
 ---
 
-## 14. Known Issues / Regression Focus
+## 15. Known Issues / Regression Focus
 
 1. **Repricer/catalog without auth protection** — security-relevant in production
 2. **UI does not check role** — admin actions visible to all; API returns 403
@@ -431,24 +562,27 @@ curl http://127.0.0.1:8000/api/health
 5. **QC `run` and `patch_finding`** — no `require_admin`; any authenticated user
 6. **First user = admin** — race condition on parallel registration
 7. **SP-API rate limits / timeouts** — "Sync all 9" and sales report can take a long time (up to ~10 min)
-8. **Edge function cron:** 120s timeout
+8. **Sales detail page** has no in-app link from Sales Performance — navigate via URL `/sales/{SKU}` only
+9. **`signal_overpriced_low_traffic`** defined in YAML but not implemented in features engine
+10. **Edge function cron:** 120s timeout
 
 ---
 
-## 15. Test Priorities (Recommended)
+## 16. Test Priorities (Recommended)
 
 | Priority | Area | Why |
 |----------|------|-----|
 | **P0** | Repricing (dry-run + live), variation/FBM sync, reflection | Core function, direct Amazon impact |
 | **P0** | SKU rules (min/max, overrides) | Prevent pricing errors |
+| **P1** | Overview KPIs, sales sync + detail, QC dashboard | New release features |
 | **P1** | History, catalog sync, multi-marketplace | Data consistency |
 | **P1** | Auth/roles (admin vs. user vs. local-dev) | Security |
-| **P2** | Sales, QC, features engine | Analytics and monitoring |
+| **P2** | Features engine, pricing signals | Analytics and monitoring |
 | **P2** | Edge cases (FBM SKU input, `double_only`, missing FBM SKU) | Stability |
 
 ---
 
-## 16. Glossary
+## 17. Glossary
 
 | Term | Meaning |
 |------|---------|
@@ -463,26 +597,44 @@ curl http://127.0.0.1:8000/api/health
 
 ---
 
-## 17. Summary for the Tester
+## 18. Summary for the Tester
 
 This app is an **internal Amazon repricing tool** focused on:
 
 1. **Setting prices** with automatic sync to variations and FBM
-2. **Verifying** whether Amazon adopted the prices
+2. **Verifying** whether Amazon adopted the prices (reflection)
 3. **Rules and bounds** per SKU
-4. **Catalog, history, sales, and QC** as supporting modules
+4. **Overview, sales, catalog, history, and QC** as supporting modules
 
-The most critical path is **Reprice → Preview → Dry-run/Live → History/Reflection**. Multi-marketplace behavior, auth roles, and the interaction between SKU rules, app settings, and localStorage are the most complex areas for edge-case testing.
+The most critical path is **Reprice → Preview → Dry-run/Live → History/Reflection**.
+
+**New in this release — test these thoroughly:**
+
+- **Overview dashboard** (`GET /api/overview`) — batched KPIs and QC alert counts
+- **Sales performance + detail** — Amazon Sales & Traffic ETL, per-SKU 30-day view
+- **QC dashboard** — three automated agents with resolve workflow
+- **Multi-marketplace selector** — 9 EU countries with per-country data
+- **Auth & roles** — login, admin vs. user permissions
+
+Multi-marketplace behavior, auth roles, and the interaction between SKU rules, app settings, and localStorage remain the most complex areas for edge-case testing.
 
 ---
 
-## 18. Key File References
+## 19. Key File References
 
 | Area | Path |
 |------|------|
 | API entry | `api/main.py` |
 | Frontend routes | `web/src/App.tsx` |
+| Overview API | `api/routes/overview.py` |
+| Sales API + ETL | `api/routes/sales.py`, `lib/amazon_reports.py` |
+| Sales detail page | `web/src/pages/SalesDetailPage.tsx` |
+| Overview page | `web/src/pages/OverviewPage.tsx` |
+| QC dashboard | `web/src/pages/QcDashboardPage.tsx`, `lib/qc/runner.py` |
+| Marketplace selector | `web/src/components/MarketplaceSelector.tsx`, `lib/marketplaces.py` |
+| Price reflection | `lib/price_reflection.py` |
+| Features engine | `lib/features_engine.py`, `config/pricing_features.yaml` |
 | Repricing logic | `api/routes/repricer.py`, `lib/variations.py`, `lib/fulfillment_pairs.py` |
+| Auth | `api/routes/auth.py`, `web/src/components/AuthProvider.tsx` |
 | DB schema | `supabase/migrations/` |
 | Deployment | `vercel.json` |
-| Pricing features config | `config/pricing_features.yaml` |

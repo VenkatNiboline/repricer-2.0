@@ -1,17 +1,19 @@
 # Supabase project: amazon-repricer
 # Dashboard: https://supabase.com/dashboard/project/mpdhzvklvyzjwxpvsfkw
 
-## Edge Function secrets (Dashboard → Edge Functions → sync-catalog → Secrets)
+## Edge Function secrets (Dashboard → Edge Functions → Secrets)
 
-Required:
+Applies to **sync-catalog** and **sync-sales**:
+
 - LWA_REFRESH_TOKEN
 - LWA_CLIENT_ID
 - LWA_CLIENT_SECRET
 - SELLER_ID
-- CRON_SECRET          (for pg_cron; openssl rand -hex 32)
-- SUPABASE_SERVICE_ROLE_KEY  (Dashboard → Settings → API → service_role)
+- CRON_SECRET — must match vault `catalog_cron_secret` (see `scripts/setup_supabase_catalog_cron.sql`)
 
-SUPABASE_URL and SUPABASE_ANON_KEY are injected automatically.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically for Edge Functions.
+
+Also set `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` on **Vercel** (run `scripts/sync_vercel_env.sh` after filling `ENV/AmazonCredentials.env`).
 
 ## How it works
 

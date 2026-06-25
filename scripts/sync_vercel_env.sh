@@ -26,9 +26,14 @@ while IFS='=' read -r key value; do
   [[ "$key" =~ ^#.*$ ]] && continue
   [[ -z "$key" ]] && continue
   case "$key" in
-    LWA_*|SELLER_ID|SUPABASE_*)
-      add_env "$key" "$value" production
-      add_env "$key" "$value" preview
+    LWA_*|SELLER_ID|SUPABASE_*|CRON_SECRET|CATALOG_CRON_SECRET)
+      if [ "$key" = "CATALOG_CRON_SECRET" ]; then
+        add_env "CRON_SECRET" "$value" production
+        add_env "CRON_SECRET" "$value" preview
+      else
+        add_env "$key" "$value" production
+        add_env "$key" "$value" preview
+      fi
       ;;
   esac
 done < <(grep -E '^[A-Z_]+=' "$ENV_FILE")

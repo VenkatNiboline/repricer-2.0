@@ -11,7 +11,7 @@ from pydantic import BaseModel, EmailStr
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import ACCESS_COOKIE, REFRESH_COOKIE, auth_configured, get_current_user_id
+from api.auth import ACCESS_COOKIE, REFRESH_COOKIE, AuthCtx, auth_configured, current_auth
 from api.middleware.security import set_csrf_cookie
 from env_config import load_env
 
@@ -72,11 +72,13 @@ def _clear_session_cookies(response: Response) -> None:
     response.delete_cookie(REFRESH_COOKIE, path="/")
 
 
-def _profile_for_user(user_id: str, email: Optional[str]) -> UserOut:
+def _profile_for_user(
+    user_id: str, email: Optional[str], access_token: Optional[str] = None
+) -> UserOut:
     try:
         from supabase_store import get_profile
 
-        profile = get_profile(user_id)
+        profile = get_profile(user_id, access_token=access_token)
         if profile:
             return UserOut(
                 id=user_id,
@@ -94,22 +96,22 @@ def auth_status():
 
 
 @router.get("/auth/me", response_model=Optional[UserOut])
-def auth_me(user_id: Optional[str] = Depends(get_current_user_id)):
-    if not auth_configured() or not user_id:
+def auth_me(auth: AuthCtx = Depends(current_auth)):
+    if not auth_configured() or not auth.user_id:
         return None
     try:
         from supabase_store import get_profile
 
-        profile = get_profile(user_id)
+        profile = get_profile(auth.user_id, access_token=auth.access_token)
         if profile:
             return UserOut(
-                id=user_id,
+                id=auth.user_id,
                 email=profile.get("email"),
                 role=profile.get("role") or "user",
             )
     except Exception:
         pass
-    return UserOut(id=user_id, role="user")
+    return UserOut(id=auth.user_id, role="user")
 
 
 @router.get("/auth/csrf")
@@ -136,7 +138,7 @@ def login(body: LoginIn, response: Response):
 
     _set_session_cookies(response, session.access_token, session.refresh_token)
     set_csrf_cookie(response, secrets.token_urlsafe(32))
-    return _profile_for_user(str(user.id), user.email)
+    return _profile_for_user(str(user.id), user.email, access_token=session.access_token)
 
 
 @router.post("/auth/signup")
@@ -152,7 +154,7 @@ def signup(body: SignUpIn, response: Response):
     if session and user:
         _set_session_cookies(response, session.access_token, session.refresh_token)
         set_csrf_cookie(response, secrets.token_urlsafe(32))
-        return _profile_for_user(str(user.id), user.email)
+        return _profile_for_user(str(user.id), user.email, access_token=session.access_token)
 
     return {"message": "Account created. Check your email if confirmation is required."}
 

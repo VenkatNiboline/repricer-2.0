@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from amazon_listing import MARKETPLACE_IDS
 from amazon_reports import fetch_and_flatten_sales_report
-from api.auth import optional_user_id, require_admin
+from api.auth import AuthCtx, require_admin, require_auth
 from features_engine import run_features_engine
 from qc.runner import run_all_qc
 from supabase_store import get_client, is_configured, list_sales_daily, upsert_sales_rows
@@ -36,10 +36,9 @@ class SalesSummary(BaseModel):
 
 
 @router.get("/sales/summary", response_model=SalesSummary)
-def sales_summary(country: str = Query("DE"), user_id: Optional[str] = Depends(optional_user_id)):
-    _ = user_id
+def sales_summary(country: str = Query("DE"), auth: AuthCtx = Depends(require_auth)):
     country = country.upper()
-    rows = list_sales_daily(country=country, days=7, limit=5000)
+    rows = list_sales_daily(country=country, days=7, limit=5000, access_token=auth.access_token)
     revenue = sum(float(r.get("ordered_product_sales_amount") or 0) for r in rows)
     units = sum(int(r.get("units_ordered") or 0) for r in rows)
     return SalesSummary(
@@ -56,12 +55,13 @@ def get_sales(
     sku: Optional[str] = Query(None),
     days: int = Query(30),
     limit: int = Query(500),
-    user_id: Optional[str] = Depends(optional_user_id),
+    auth: AuthCtx = Depends(require_auth),
 ):
-    _ = user_id
     if not is_configured():
         return []
-    return list_sales_daily(country=country, sku=sku, days=days, limit=limit)
+    return list_sales_daily(
+        country=country, sku=sku, days=days, limit=limit, access_token=auth.access_token
+    )
 
 
 def _run_sales_sync(country: str, region: str, days: int, created_by: Optional[str] = None) -> dict:

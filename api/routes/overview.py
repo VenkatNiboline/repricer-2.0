@@ -10,7 +10,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import optional_user_id
+from api.auth import AuthCtx, require_auth
 from catalog import catalog_stats, get_catalog_payload
 from supabase_store import is_configured, list_qc_findings, list_sales_daily
 
@@ -31,8 +31,7 @@ class OverviewResponse(BaseModel):
 
 
 @router.get("/overview", response_model=OverviewResponse)
-def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(optional_user_id)):
-    _ = user_id
+def get_overview(country: str = Query("DE"), auth: AuthCtx = Depends(require_auth)):
     country = country.upper()
 
     if not is_configured():
@@ -49,15 +48,21 @@ def get_overview(country: str = Query("DE"), user_id: Optional[str] = Depends(op
         )
 
     try:
-        payload = get_catalog_payload(country, refresh=False)
+        payload = get_catalog_payload(country, refresh=False, access_token=auth.access_token)
         stats = catalog_stats(payload)
-        sales_rows = list_sales_daily(country=country, days=7, limit=5000)
+        sales_rows = list_sales_daily(
+            country=country, days=7, limit=5000, access_token=auth.access_token
+        )
         revenue = sum(float(r.get("ordered_product_sales_amount") or 0) for r in sales_rows)
         units = sum(int(r.get("units_ordered") or 0) for r in sales_rows)
 
-        critical = list_qc_findings(resolved=False, severity="critical", limit=500)
-        warning = list_qc_findings(resolved=False, severity="warning", limit=500)
-        all_open = list_qc_findings(resolved=False, limit=500)
+        critical = list_qc_findings(
+            resolved=False, severity="critical", limit=500, access_token=auth.access_token
+        )
+        warning = list_qc_findings(
+            resolved=False, severity="warning", limit=500, access_token=auth.access_token
+        )
+        all_open = list_qc_findings(resolved=False, limit=500, access_token=auth.access_token)
 
         return OverviewResponse(
             country=country,

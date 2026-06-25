@@ -111,12 +111,13 @@ def get_catalog_payload(
     *,
     fulfillment: Optional[str] = None,
     refresh: bool = False,
+    access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     country = country.upper()
     if not refresh and supabase_configured():
-        rows = get_catalog_rows(country, fulfillment=fulfillment)
+        rows = get_catalog_rows(country, fulfillment=fulfillment, access_token=access_token)
         if rows:
-            stats = catalog_stats_from_db(country)
+            stats = catalog_stats_from_db(country, access_token=access_token)
             return {
                 "country": country,
                 "synced_at": stats.get("synced_at"),
@@ -151,13 +152,14 @@ def scan_catalog(
     refresh: bool = False,
     max_age_seconds: int = 3600,
     created_by: Optional[str] = None,
+    access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     country = country.upper()
 
     if not refresh and supabase_configured():
-        rows = get_catalog_rows(country)
+        rows = get_catalog_rows(country, access_token=access_token)
         if rows:
-            stats = catalog_stats_from_db(country)
+            stats = catalog_stats_from_db(country, access_token=access_token)
             return {
                 "country": country,
                 "synced_at": stats.get("synced_at"),
@@ -178,7 +180,7 @@ def scan_catalog(
                         return cached
                 except ValueError:
                     pass
-        return get_catalog_payload(country, refresh=False)
+        return get_catalog_payload(country, refresh=False, access_token=access_token)
 
     client = AmazonListingClient(region=region)
     rows: List[Dict[str, Any]] = []

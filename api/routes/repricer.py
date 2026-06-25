@@ -4,14 +4,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from amazon_listing import AmazonListingClient, MARKETPLACE_IDS
-from api.auth import get_current_user_id
+from api.auth import AuthCtx, require_auth
 from fulfillment_pairs import (
     DEFAULT_FBM_DISCOUNT,
     PlannedUpdate,
@@ -169,18 +169,12 @@ def _bounded_price(sku: str, country: str, price: float) -> float:
     return apply_price_bounds(price, rule)
 
 
-def _bearer_token(authorization: Optional[str]) -> Optional[str]:
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    return authorization.removeprefix("Bearer ").strip() or None
-
-
 @router.post("/repricer/update", response_model=PriceUpdateResponse)
 def update_price(
     body: PriceUpdateRequest,
-    user_id: Optional[str] = Depends(get_current_user_id),
-    authorization: Optional[str] = Header(default=None),
+    auth: AuthCtx = Depends(require_auth),
 ):
+    user_id = auth.user_id
     country = body.country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
@@ -272,7 +266,7 @@ def update_price(
     history_saved = True
     history_error = None
     try:
-        record_price_history(history_entries)
+        record_price_history(history_entries, access_token=auth.access_token)
     except Exception as exc:
         history_saved = False
         history_error = str(exc)

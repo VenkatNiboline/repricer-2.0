@@ -21,7 +21,7 @@ from fulfillment_pairs import (
 )
 from price import currency_for_country, extract_current_price, marketplace_id_for_country
 from catalog import catalog_stats, get_catalog_payload, scan_catalog
-from api.auth import get_current_user_id
+from api.auth import AuthCtx, require_auth
 
 from variations import compute_linked_prices, fetch_variation_family
 
@@ -72,7 +72,7 @@ class VariationPreview(BaseModel):
 
 
 @router.get("/marketplaces", response_model=list[MarketplaceInfo])
-def list_marketplaces():
+def list_marketplaces(auth: AuthCtx = Depends(require_auth)):
     return [
         MarketplaceInfo(code=code, currency=currency_for_country(code))
         for code in sorted(MARKETPLACE_IDS)
@@ -80,7 +80,12 @@ def list_marketplaces():
 
 
 @router.get("/skus/{sku}", response_model=SkuSummary)
-def get_sku(sku: str, country: str = Query("DE"), region: str = Query("EU")):
+def get_sku(
+    sku: str,
+    country: str = Query("DE"),
+    region: str = Query("EU"),
+    auth: AuthCtx = Depends(require_auth),
+):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
@@ -122,6 +127,7 @@ def preview_price_update(
     sync_siblings: bool = Query(True),
     sync_fbm: bool = Query(True),
     fbm_discount: float = Query(DEFAULT_FBM_DISCOUNT, ge=0, lt=1),
+    auth: AuthCtx = Depends(require_auth),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
@@ -225,11 +231,17 @@ def get_catalog_stats(
     country: str = Query("DE"),
     region: str = Query("EU"),
     refresh: bool = Query(False),
+    auth: AuthCtx = Depends(require_auth),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
-    payload = get_catalog_payload(country, refresh=False) if not refresh else scan_catalog(country, region, refresh=True)
+    if refresh:
+        payload = scan_catalog(
+            country, region, refresh=True, created_by=auth.user_id, access_token=auth.access_token
+        )
+    else:
+        payload = get_catalog_payload(country, refresh=False, access_token=auth.access_token)
     return CatalogStats(**catalog_stats(payload))
 
 
@@ -237,12 +249,14 @@ def get_catalog_stats(
 def sync_catalog_endpoint(
     country: str = Query("DE"),
     region: str = Query("EU"),
-    user_id: Optional[str] = Depends(get_current_user_id),
+    auth: AuthCtx = Depends(require_auth),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
-    payload = scan_catalog(country, region, refresh=True, created_by=user_id)
+    payload = scan_catalog(
+        country, region, refresh=True, created_by=auth.user_id, access_token=auth.access_token
+    )
     rows = payload.get("rows") or []
     stats = catalog_stats(payload)
     return CatalogResponse(
@@ -261,16 +275,20 @@ def get_catalog(
     region: str = Query("EU"),
     refresh: bool = Query(False),
     fulfillment: Optional[str] = Query(None, description="Filter: FBA, FBM, or ALL"),
-    user_id: Optional[str] = Depends(get_current_user_id),
+    auth: AuthCtx = Depends(require_auth),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
 
     if refresh:
-        payload = scan_catalog(country, region, refresh=True, created_by=user_id)
+        payload = scan_catalog(
+            country, region, refresh=True, created_by=auth.user_id, access_token=auth.access_token
+        )
     else:
-        payload = get_catalog_payload(country, fulfillment=fulfillment, refresh=False)
+        payload = get_catalog_payload(
+            country, fulfillment=fulfillment, refresh=False, access_token=auth.access_token
+        )
 
     rows = payload.get("rows") or []
     if fulfillment and fulfillment.upper() != "ALL":
@@ -293,12 +311,15 @@ def list_fbm_skus(
     region: str = Query("EU"),
     suffix_only: bool = Query(True),
     refresh: bool = Query(False),
+    auth: AuthCtx = Depends(require_auth),
 ):
     country = country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
 
-    payload = scan_catalog(country, region, refresh=refresh)
+    payload = scan_catalog(
+        country, region, refresh=refresh, created_by=auth.user_id, access_token=auth.access_token
+    )
     rows: list[FbmSkuRow] = []
     for row in payload.get("rows") or []:
         if row.get("fulfillment") != "FBM":

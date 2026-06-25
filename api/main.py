@@ -23,14 +23,19 @@ cors_origins = [
     "http://127.0.0.1:5173",
     "https://repricer-2-0.vercel.app",
 ]
+# This deployment's own Vercel URL (set automatically on Vercel).
 vercel_url = os.getenv("VERCEL_URL")
 if vercel_url:
     cors_origins.append(f"https://{vercel_url}")
+# Comma-separated extra origins (e.g. controlled preview domains).
+for origin in os.getenv("CORS_EXTRA_ORIGINS", "").split(","):
+    origin = origin.strip()
+    if origin:
+        cors_origins.append(origin)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

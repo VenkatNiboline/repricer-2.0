@@ -10,9 +10,8 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_access_token, optional_user_id, require_admin, require_user_id
-from api.errors import raise_http_error
-from supabase_store import delete_sku_rule, is_readable, is_configured, list_sku_rules, upsert_sku_rule
+from api.auth import AuthCtx, require_admin_auth, require_auth
+from supabase_store import delete_sku_rule, is_configured, list_sku_rules, upsert_sku_rule
 
 router = APIRouter()
 
@@ -36,35 +35,34 @@ class SkuRuleOut(SkuRuleIn):
 @router.get("/rules", response_model=list[SkuRuleOut])
 def get_rules(
     country: Optional[str] = None,
-    user_id: str = Depends(require_user_id),
-    access_token: Optional[str] = Depends(get_access_token),
+    auth: AuthCtx = Depends(require_auth),
 ):
-    _ = user_id
-    if not is_readable():
+    if not is_configured():
         return []
     try:
-        return list_sku_rules(country=country, access_token=access_token)
+        return list_sku_rules(country=country, access_token=auth.access_token)
     except Exception as exc:
-        raise_http_error(exc, client_message="Failed to load rules")
+        raise HTTPException(500, str(exc)) from exc
 
 
 @router.put("/rules", response_model=SkuRuleOut)
-def save_rule(body: SkuRuleIn, user_id: str = Depends(require_admin)):
+def save_rule(body: SkuRuleIn, auth: AuthCtx = Depends(require_admin_auth)):
     if not is_configured():
         raise HTTPException(503, "Supabase not configured")
     try:
-        return upsert_sku_rule(body.model_dump(), updated_by=user_id)
+        return upsert_sku_rule(
+            body.model_dump(), updated_by=auth.user_id, access_token=auth.access_token
+        )
     except Exception as exc:
-        raise_http_error(exc, client_message="Failed to save rule")
+        raise HTTPException(500, str(exc)) from exc
 
 
 @router.delete("/rules/{sku}")
-def remove_rule(sku: str, country: str = "DE", user_id: str = Depends(require_admin)):
-    _ = user_id
+def remove_rule(sku: str, country: str = "DE", auth: AuthCtx = Depends(require_admin_auth)):
     if not is_configured():
         raise HTTPException(503, "Supabase not configured")
     try:
-        delete_sku_rule(sku, country)
+        delete_sku_rule(sku, country, access_token=auth.access_token)
         return {"ok": True}
     except Exception as exc:
-        raise_http_error(exc, client_message="Failed to delete rule")
+        raise HTTPException(500, str(exc)) from exc

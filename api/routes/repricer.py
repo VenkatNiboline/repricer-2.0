@@ -4,15 +4,14 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from amazon_listing import AmazonListingClient, MARKETPLACE_IDS
-from api.auth import get_access_token, require_user_id
-from api.errors import raise_http_error
+from api.auth import AuthCtx, require_auth
 from fulfillment_pairs import (
     DEFAULT_FBM_DISCOUNT,
     PlannedUpdate,
@@ -31,7 +30,6 @@ from supabase_store import (
     apply_price_bounds,
     get_sku_rule,
     is_configured as supabase_configured,
-    is_readable as supabase_readable,
     record_price_history,
 )
 from variations import compute_linked_prices, fetch_variation_family
@@ -164,34 +162,19 @@ def _update_one(client, sku, target_price, country, marketplace_id, currency, dr
     )
 
 
-def _bounded_price(
-    sku: str,
-    country: str,
-    price: float,
-    access_token: Optional[str] = None,
-) -> float:
-    if not supabase_configured() and not (supabase_readable() and access_token):
+def _bounded_price(sku: str, country: str, price: float) -> float:
+    if not supabase_configured():
         return price
-    try:
-        rule = get_sku_rule(sku, country, access_token=access_token)
-        return apply_price_bounds(price, rule)
-    except RuntimeError:
-        return price
-
-
-def _bearer_token(authorization: Optional[str]) -> Optional[str]:
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    return authorization.removeprefix("Bearer ").strip() or None
+    rule = get_sku_rule(sku, country)
+    return apply_price_bounds(price, rule)
 
 
 @router.post("/repricer/update", response_model=PriceUpdateResponse)
 def update_price(
     body: PriceUpdateRequest,
-    user_id: str = Depends(require_user_id),
-    access_token: Optional[str] = Depends(get_access_token),
-    authorization: Optional[str] = Header(default=None),
+    auth: AuthCtx = Depends(require_auth),
 ):
+    user_id = auth.user_id
     country = body.country.upper()
     if country not in MARKETPLACE_IDS:
         raise HTTPException(400, f"Unknown country: {country}")
@@ -202,14 +185,9 @@ def update_price(
     try:
         client = AmazonListingClient(region=body.region)
         fba_sku, fba_price = normalize_fba_anchor(body.sku, body.price, body.fbm_discount)
-        fba_price = _bounded_price(fba_sku, country, fba_price, access_token=access_token)
+        fba_price = _bounded_price(fba_sku, country, fba_price)
 
-        primary_rule = None
-        if supabase_configured() or (supabase_readable() and access_token):
-            try:
-                primary_rule = get_sku_rule(fba_sku, country, access_token=access_token)
-            except RuntimeError:
-                primary_rule = None
+        primary_rule = get_sku_rule(fba_sku, country) if supabase_configured() else None
         sync_siblings = body.sync_siblings
         sync_fbm = body.sync_fbm
         fbm_discount = body.fbm_discount
@@ -237,9 +215,7 @@ def update_price(
                 plan.append(
                     PlannedUpdate(
                         sku=update.sku,
-                        target_price=_bounded_price(
-                            update.sku, country, update.target_price, access_token=access_token
-                        ),
+                        target_price=_bounded_price(update.sku, country, update.target_price),
                         linked=True,
                         multiplier=update.multiplier,
                         link_kind="variation",
@@ -249,11 +225,9 @@ def update_price(
             plan = append_fbm_updates(client, plan, country, fbm_discount)
             for planned in plan:
                 if planned.link_kind == "fbm":
-                    planned.target_price = _bounded_price(
-                        planned.sku, country, planned.target_price, access_token=access_token
-                    )
+                    planned.target_price = _bounded_price(planned.sku, country, planned.target_price)
     except Exception as exc:
-        raise_http_error(exc, client_message="Price update failed")
+        raise HTTPException(500, str(exc)) from exc
 
     results: list[UpdateResultOut] = []
     history_entries = []
@@ -292,7 +266,7 @@ def update_price(
     history_saved = True
     history_error = None
     try:
-        record_price_history(history_entries, access_token=access_token)
+        record_price_history(history_entries, access_token=auth.access_token)
     except Exception as exc:
         history_saved = False
         history_error = str(exc)

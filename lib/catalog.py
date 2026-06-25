@@ -16,13 +16,11 @@ try:
         catalog_stats_from_db,
         get_catalog_rows,
         is_configured as supabase_configured,
-        is_readable as supabase_readable,
         record_sync_run,
         upsert_catalog_rows,
     )
 except ImportError:
     supabase_configured = lambda: False  # type: ignore
-    supabase_readable = lambda: False  # type: ignore
 
 ROOT = Path(__file__).parent.parent
 CACHE_DIR = ROOT / "data" / "cache"
@@ -108,10 +106,6 @@ def save_cache(country: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return payload
 
 
-def _can_read_supabase(access_token: Optional[str] = None) -> bool:
-    return supabase_configured() or (supabase_readable() and bool(access_token))
-
-
 def get_catalog_payload(
     country: str,
     *,
@@ -120,20 +114,17 @@ def get_catalog_payload(
     access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     country = country.upper()
-    if not refresh and _can_read_supabase(access_token):
-        try:
-            rows = get_catalog_rows(country, fulfillment=fulfillment, access_token=access_token)
-            if rows:
-                stats = catalog_stats_from_db(country, access_token=access_token)
-                return {
-                    "country": country,
-                    "synced_at": stats.get("synced_at"),
-                    "count": len(rows),
-                    "rows": rows,
-                    "source": "supabase",
-                }
-        except RuntimeError:
-            pass
+    if not refresh and supabase_configured():
+        rows = get_catalog_rows(country, fulfillment=fulfillment, access_token=access_token)
+        if rows:
+            stats = catalog_stats_from_db(country, access_token=access_token)
+            return {
+                "country": country,
+                "synced_at": stats.get("synced_at"),
+                "count": len(rows),
+                "rows": rows,
+                "source": "supabase",
+            }
 
     cached = load_cache(country) if not refresh else None
     if cached:
@@ -165,20 +156,17 @@ def scan_catalog(
 ) -> Dict[str, Any]:
     country = country.upper()
 
-    if not refresh and _can_read_supabase(access_token):
-        try:
-            rows = get_catalog_rows(country, access_token=access_token)
-            if rows:
-                stats = catalog_stats_from_db(country, access_token=access_token)
-                return {
-                    "country": country,
-                    "synced_at": stats.get("synced_at"),
-                    "count": len(rows),
-                    "rows": rows,
-                    "source": "supabase",
-                }
-        except RuntimeError:
-            pass
+    if not refresh and supabase_configured():
+        rows = get_catalog_rows(country, access_token=access_token)
+        if rows:
+            stats = catalog_stats_from_db(country, access_token=access_token)
+            return {
+                "country": country,
+                "synced_at": stats.get("synced_at"),
+                "count": len(rows),
+                "rows": rows,
+                "source": "supabase",
+            }
 
     if not refresh:
         cached = load_cache(country)

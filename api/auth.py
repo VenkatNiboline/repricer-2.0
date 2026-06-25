@@ -135,6 +135,13 @@ def require_admin(
     return require_admin_auth(request, authorization, repricer_at).user_id
 
 
+def get_access_token(
+    authorization: Optional[str] = Header(default=None),
+    repricer_at: Optional[str] = Cookie(default=None),
+) -> Optional[str]:
+    return _token_from_request(authorization, repricer_at)
+
+
 def optional_user_id(
     request: Request,
     authorization: Optional[str] = Header(default=None),

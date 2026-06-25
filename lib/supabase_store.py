@@ -25,6 +25,11 @@ def is_configured() -> bool:
     return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 
 
+def is_readable() -> bool:
+    """Anon key available — authenticated reads via user JWT (RLS)."""
+    return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
+
+
 def get_client():
     """Service-role client. Bypasses RLS — use only for system/cron/background paths."""
     global _client
@@ -267,6 +272,23 @@ def list_price_history(
     if sku:
         query = query.eq("sku", sku)
     return query.execute().data or []
+
+
+def get_price_history_by_submission_id(
+    submission_id: str,
+    access_token: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    client = _client_for(access_token)
+    result = (
+        client.table("price_history")
+        .select("*")
+        .eq("submission_id", submission_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = result.data or []
+    return rows[0] if rows else None
 
 
 def list_pending_reflections(limit: int = 50) -> List[Dict[str, Any]]:

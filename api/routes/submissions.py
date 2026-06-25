@@ -11,8 +11,9 @@ ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from amazon_listing import AmazonListingClient, MARKETPLACE_IDS
-from api.auth import get_access_token, optional_user_id
+from api.auth import AuthCtx, require_auth
 from api.errors import raise_http_error
+from env_config import AMAZON_DISABLED_MESSAGE, amazon_api_enabled
 from price import currency_for_country, extract_current_price, marketplace_id_for_country
 from supabase_store import get_price_history_by_submission_id, is_readable
 
@@ -36,16 +37,16 @@ def lookup_submission(
     country: Optional[str] = Query(None),
     sku: Optional[str] = Query(None),
     region: str = Query("EU"),
-    user_id: Optional[str] = Depends(optional_user_id),
-    access_token: Optional[str] = Depends(get_access_token),
+    auth: AuthCtx = Depends(require_auth),
 ):
-    _ = user_id
     submission_id = submission_id.strip()
     history = None
 
     if is_readable():
         try:
-            history = get_price_history_by_submission_id(submission_id, access_token=access_token)
+            history = get_price_history_by_submission_id(
+                submission_id, access_token=auth.access_token
+            )
         except RuntimeError:
             history = None
 
@@ -62,6 +63,9 @@ def lookup_submission(
 
     marketplace_id = marketplace_id_for_country(resolved_country)
     currency = currency_for_country(resolved_country)
+
+    if not amazon_api_enabled():
+        raise HTTPException(503, AMAZON_DISABLED_MESSAGE)
 
     try:
         client = AmazonListingClient(region=region)

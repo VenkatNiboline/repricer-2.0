@@ -1,11 +1,13 @@
 import { NavLink } from "react-router-dom";
 import {
+  BarChart3,
   History,
   LayoutDashboard,
   List,
   Package,
   Settings,
   Shield,
+  ShieldCheck,
   Tag,
   Zap,
 } from "lucide-react";
@@ -16,8 +18,10 @@ const nav = [
   { to: "/", label: "Overview", icon: LayoutDashboard },
   { to: "/catalog", label: "SKU Catalog", icon: List },
   { to: "/reprice", label: "Reprice", icon: Zap },
+  { to: "/sales", label: "Sales", icon: BarChart3 },
   { to: "/rules", label: "SKU Rules", icon: Shield },
   { to: "/history", label: "History", icon: History },
+  { to: "/qc", label: "QC", icon: ShieldCheck },
   { to: "/fbm", label: "FBM Catalog", icon: Package },
   { to: "/settings", label: "Settings", icon: Settings },
 ];

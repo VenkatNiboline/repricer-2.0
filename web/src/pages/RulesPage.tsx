@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
-import { api, SkuRule, SkuRuleInput } from "../api/client";
+import type { SkuRule, SkuRuleInput } from "../api/client";
+import { api } from "../api/client";
 import { Layout } from "../components/Layout";
 import { useSettings } from "../components/SettingsProvider";
 

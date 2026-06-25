@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from amazon_listing import AmazonListingClient
 from fulfillment_pairs import classify_fulfillment, fba_sku_for, is_fbm_sku
+from marketplaces import catalog_table_for_country
 from price import currency_for_country, extract_current_price, marketplace_id_for_country
 
 try:
@@ -45,6 +46,18 @@ def _iter_all_listings(client: AmazonListingClient, country: str):
             break
 
 
+def _extract_product_name(item: Dict[str, Any]) -> Optional[str]:
+    summaries = item.get("summaries") or []
+    if summaries and summaries[0].get("itemName"):
+        return summaries[0]["itemName"]
+    attrs = item.get("attributes") or {}
+    for entry in attrs.get("item_name") or []:
+        value = entry.get("value")
+        if value:
+            return value
+    return None
+
+
 def _row_from_item(item: Dict[str, Any], country: str) -> Optional[Dict[str, Any]]:
     sku = item.get("sku") or ""
     if not sku:
@@ -61,6 +74,7 @@ def _row_from_item(item: Dict[str, Any], country: str) -> Optional[Dict[str, Any
     return {
         "sku": sku,
         "asin": asin,
+        "product_name": _extract_product_name(item),
         "product_type": product_type,
         "fulfillment": fulfillment,
         "price": price,
@@ -97,12 +111,13 @@ def get_catalog_payload(
     *,
     fulfillment: Optional[str] = None,
     refresh: bool = False,
+    access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     country = country.upper()
     if not refresh and supabase_configured():
-        rows = get_catalog_rows(country, fulfillment=fulfillment)
+        rows = get_catalog_rows(country, fulfillment=fulfillment, access_token=access_token)
         if rows:
-            stats = catalog_stats_from_db(country)
+            stats = catalog_stats_from_db(country, access_token=access_token)
             return {
                 "country": country,
                 "synced_at": stats.get("synced_at"),
@@ -137,13 +152,14 @@ def scan_catalog(
     refresh: bool = False,
     max_age_seconds: int = 3600,
     created_by: Optional[str] = None,
+    access_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     country = country.upper()
 
     if not refresh and supabase_configured():
-        rows = get_catalog_rows(country)
+        rows = get_catalog_rows(country, access_token=access_token)
         if rows:
-            stats = catalog_stats_from_db(country)
+            stats = catalog_stats_from_db(country, access_token=access_token)
             return {
                 "country": country,
                 "synced_at": stats.get("synced_at"),
@@ -164,6 +180,7 @@ def scan_catalog(
                         return cached
                 except ValueError:
                     pass
+        return get_catalog_payload(country, refresh=False, access_token=access_token)
 
     client = AmazonListingClient(region=region)
     rows: List[Dict[str, Any]] = []

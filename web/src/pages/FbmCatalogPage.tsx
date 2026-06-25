@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Download, Loader2, Search } from "lucide-react";
-import { api, FbmSkuRow } from "../api/client";
+import type { FbmSkuRow } from "../api/client";
 import { Badge } from "../components/Badge";
 import { Layout } from "../components/Layout";
 import { useSettings } from "../components/SettingsProvider";
+import { api } from "../api/client";
 import { formatPrice } from "../lib/utils";
 
 export function FbmCatalogPage() {
@@ -19,7 +20,7 @@ export function FbmCatalogPage() {
       setLoading(true);
       setError(null);
       try {
-        const data = await api.listFbmSkus(settings.country, true);
+        const data = await api.listFbmSkus(settings.country);
         if (!cancelled) setRows(data);
       } catch (err) {
         if (!cancelled) {
@@ -61,7 +62,7 @@ export function FbmCatalogPage() {
   return (
     <Layout
       title="FBM Catalog"
-      subtitle="All FBM offers detected by SKU suffix — synced automatically at a discount below FBA."
+      subtitle={`FBM offers in ${settings.country} from sku_catalog_${settings.country.toLowerCase()}.`}
       actions={
         <button className="btn-secondary" onClick={exportCsv} disabled={!filtered.length}>
           <Download className="h-4 w-4" />
@@ -80,38 +81,34 @@ export function FbmCatalogPage() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          <div className="text-sm text-ink-muted">
-            {loading ? "Loading…" : `${filtered.length} FBM SKUs`}
-          </div>
+          <div className="text-sm text-ink-muted">{filtered.length} FBM SKUs</div>
         </div>
 
         {error && (
-          <div className="border-b border-line bg-red-50 px-6 py-3 text-sm text-red-700">
-            {error}
-          </div>
+          <div className="border-b border-line bg-red-50 px-6 py-3 text-sm text-red-700">{error}</div>
         )}
 
         {loading ? (
           <div className="flex items-center justify-center gap-2 px-6 py-16 text-sm text-ink-muted">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Scanning Amazon catalog (this can take ~1 minute)…
+            Loading from Supabase…
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] text-left text-sm">
-              <thead className="bg-surface-subtle text-xs text-ink-muted">
+            <table className="w-full min-w-[800px] text-left text-sm">
+              <thead className="bg-surface-subtle text-xs font-medium text-ink-muted">
                 <tr>
-                  <th className="px-6 py-3 font-medium">FBM SKU</th>
-                  <th className="px-6 py-3 font-medium">FBA pair</th>
-                  <th className="px-6 py-3 font-medium">Price</th>
-                  <th className="px-6 py-3 font-medium">Detected by</th>
+                  <th className="px-6 py-3">FBM SKU</th>
+                  <th className="px-6 py-3">FBA pair</th>
+                  <th className="px-6 py-3">Price</th>
+                  <th className="px-6 py-3">Detected</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((row) => (
-                  <tr key={row.sku} className="border-t border-line hover:bg-surface-muted/60">
+                  <tr key={row.sku} className="border-t border-line">
                     <td className="px-6 py-3.5 font-medium text-ink">{row.sku}</td>
-                    <td className="px-6 py-3.5 text-ink-muted">{row.fba_pair || "—"}</td>
+                    <td className="px-6 py-3.5 text-ink-muted">{row.fba_pair}</td>
                     <td className="px-6 py-3.5 font-medium">
                       {formatPrice(row.price, row.currency)}
                     </td>
@@ -123,7 +120,7 @@ export function FbmCatalogPage() {
                 {!filtered.length && (
                   <tr>
                     <td colSpan={4} className="px-6 py-12 text-center text-ink-muted">
-                      No FBM SKUs found.
+                      No FBM SKUs in Supabase. Sync the catalog first.
                     </td>
                   </tr>
                 )}

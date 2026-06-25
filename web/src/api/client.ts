@@ -53,6 +53,7 @@ export interface CatalogStats {
 export interface CatalogRow {
   sku: string;
   asin: string | null;
+  product_name: string | null;
   product_type: string | null;
   fulfillment: string;
   price: number | null;
@@ -96,6 +97,8 @@ export interface PriceUpdateResponse {
   currency: string;
   parent_sku: string | null;
   results: UpdateResult[];
+  history_saved?: boolean;
+  history_error?: string | null;
 }
 
 export interface RepricerSettings {
@@ -123,6 +126,13 @@ export interface SkuRule {
 
 export type SkuRuleInput = Omit<SkuRule, "id" | "updated_at">;
 
+export type ReflectionStatus =
+  | "pending"
+  | "reflected"
+  | "mismatch"
+  | "timeout"
+  | "not_applicable";
+
 export interface PriceHistoryRow {
   id: number;
   sku: string;
@@ -138,6 +148,9 @@ export interface PriceHistoryRow {
   submission_id?: string | null;
   verified_price?: number | null;
   error?: string | null;
+  reflection_status?: ReflectionStatus;
+  reflection_checked_at?: string | null;
+  reflection_attempts?: number;
   created_at: string;
 }
 
@@ -152,9 +165,69 @@ export interface AppSettings {
 
 export type AppSettingsInput = Omit<AppSettings, "updated_at">;
 
-import { getAccessToken } from "../lib/supabase";
+export interface AuthUser {
+  id: string;
+  email?: string | null;
+  role: string;
+}
+
+export interface HealthStatus {
+  status: string;
+  auth_configured: boolean;
+  history_write_ready: boolean;
+  db_configured: boolean;
+}
+
+export interface QcFinding {
+  id: number;
+  agent_name: string;
+  check_id: string;
+  severity: "critical" | "warning" | "info";
+  sku?: string | null;
+  country?: string | null;
+  message: string;
+  resolved: boolean;
+  created_at: string;
+}
+
+export interface OverviewData {
+  country: string;
+  catalog_total: number;
+  catalog_fba: number;
+  catalog_fbm: number;
+  catalog_synced_at: string | null;
+  sales_revenue_7d: number;
+  sales_units_7d: number;
+  open_qc_critical: number;
+  open_qc_warning: number;
+  open_qc_total: number;
+}
+
+export interface SalesDailyRow {
+  child_asin: string;
+  sku?: string | null;
+  ob_date: string;
+  ordered_product_sales_amount?: number | null;
+  units_ordered?: number | null;
+  sessions?: number | null;
+  buy_box_percentage?: number | null;
+  unit_session_percentage?: number | null;
+}
+
+export interface SalesSummary {
+  country: string;
+  total_revenue_7d: number;
+  total_units_7d: number;
+  row_count: number;
+}
 
 const SETTINGS_KEY = "repricer-settings";
+const CSRF_COOKIE = "repricer_csrf";
+
+function getCsrfToken(): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${CSRF_COOKIE}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 export function loadSettings(): RepricerSettings {
   const defaults: RepricerSettings = {
@@ -179,23 +252,46 @@ export function saveSettings(settings: RepricerSettings) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = await getAccessToken();
   const headers = new Headers(init?.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
   if (!headers.has("Content-Type") && init?.body) {
     headers.set("Content-Type", "application/json");
   }
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    const csrf = getCsrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+  }
 
-  const response = await fetch(path, { ...init, headers });
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Request failed (${response.status})`);
   }
+  if (response.status === 204) return undefined as T;
   return response.json();
 }
 
 export const api = {
-  health: () => request<{ status: string }>("/api/health"),
+  health: () => request<HealthStatus>("/api/health"),
+  authStatus: () => request<{ configured: boolean }>("/api/auth/status"),
+  me: () => request<AuthUser | null>("/api/auth/me"),
+  login: (email: string, password: string) =>
+    request<AuthUser>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  signup: (email: string, password: string) =>
+    request<AuthUser | { message: string }>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  csrf: () => request<{ csrf_token: string }>("/api/auth/csrf"),
+  overview: (country: string) => request<OverviewData>(`/api/overview?country=${country}`),
   marketplaces: () => request<Marketplace[]>("/api/marketplaces"),
   getSku: (sku: string, country: string) =>
     request<SkuSummary>(`/api/skus/${encodeURIComponent(sku)}?country=${country}`),
@@ -242,7 +338,6 @@ export const api = {
   ) =>
     request<PriceUpdateResponse>("/api/repricer/update", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         sku,
         price,
@@ -261,7 +356,6 @@ export const api = {
   saveRule: (rule: SkuRuleInput) =>
     request<SkuRule>("/api/rules", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(rule),
     }),
   deleteRule: (sku: string, country: string) =>
@@ -275,11 +369,28 @@ export const api = {
     const q = params.toString();
     return request<PriceHistoryRow[]>(`/api/history${q ? `?${q}` : ""}`);
   },
+  verifyHistory: (historyId: number) =>
+    request<Record<string, unknown>>(`/api/history/${historyId}/verify`, { method: "POST" }),
   getAppSettings: () => request<AppSettings>("/api/app-settings"),
   saveAppSettings: (settings: AppSettingsInput) =>
     request<AppSettings>("/api/app-settings", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     }),
+  getQcFindings: (resolved = false) =>
+    request<QcFinding[]>(`/api/qc/findings?resolved=${resolved}`),
+  resolveQcFinding: (id: number) =>
+    request<{ ok: boolean }>(`/api/qc/findings/${id}`, { method: "PATCH" }),
+  runQc: () => request<unknown>("/api/qc/run", { method: "POST", body: "{}" }),
+  getSalesSummary: (country: string) =>
+    request<SalesSummary>(`/api/sales/summary?country=${country}`),
+  syncSales: (country: string, region = "EU", days = 7) =>
+    request<{ ok: boolean; rows: number }>("/api/sales/sync", {
+      method: "POST",
+      body: JSON.stringify({ country, region, days }),
+    }),
+  getSalesForSku: (country: string, sku: string, days = 30) =>
+    request<SalesDailyRow[]>(
+      `/api/sales?country=${country}&sku=${encodeURIComponent(sku)}&days=${days}`
+    ),
 };

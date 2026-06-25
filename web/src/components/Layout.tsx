@@ -1,4 +1,5 @@
 import { ReactNode } from "react";
+import { MarketplaceSelector } from "./MarketplaceSelector";
 import { Sidebar } from "./Sidebar";
 
 interface LayoutProps {
@@ -23,7 +24,10 @@ export function Layout({ title, subtitle, actions, children }: LayoutProps) {
                 <p className="mt-0.5 text-sm text-ink-muted">{subtitle}</p>
               )}
             </div>
-            {actions && <div className="flex items-center gap-2">{actions}</div>}
+            <div className="flex items-center gap-3">
+              <MarketplaceSelector />
+              {actions && <div className="flex items-center gap-2">{actions}</div>}
+            </div>
           </div>
         </header>
         <main className="flex-1 px-8 py-6">{children}</main>

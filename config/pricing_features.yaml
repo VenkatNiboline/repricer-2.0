@@ -1,0 +1,28 @@
+version: 1
+
+features:
+  - id: revenue_7d
+    source: sales_daily.ordered_product_sales_amount
+    aggregation: sum
+    window_days: 7
+
+  - id: units_7d
+    source: sales_daily.units_ordered
+    aggregation: sum
+    window_days: 7
+
+  - id: buy_box_avg_7d
+    source: sales_daily.buy_box_percentage
+    aggregation: avg
+    window_days: 7
+
+signals:
+  - id: signal_underpriced_high_demand
+    when: "units_7d_high_and_buy_box_high"
+    action: suggest_increase
+    priority: high
+
+  - id: signal_overpriced_low_traffic
+    when: "sessions_low_and_no_revenue"
+    action: suggest_decrease
+    priority: medium

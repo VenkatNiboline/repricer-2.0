@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
-from api.auth import get_current_user_id, require_user_id
+from api.auth import AuthCtx, require_admin_auth, require_auth
 from supabase_store import get_app_settings, is_configured, update_app_settings
 
 router = APIRouter()
@@ -34,8 +34,7 @@ class AppSettingsIn(BaseModel):
 
 
 @router.get("/app-settings", response_model=AppSettingsOut)
-def read_settings(user_id: Optional[str] = Depends(get_current_user_id)):
-    _ = user_id
+def read_settings(auth: AuthCtx = Depends(require_auth)):
     if not is_configured():
         return AppSettingsOut(
             default_country="DE",
@@ -45,17 +44,16 @@ def read_settings(user_id: Optional[str] = Depends(get_current_user_id)):
             sync_fbm=True,
         )
     try:
-        return get_app_settings()
+        return get_app_settings(access_token=auth.access_token)
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
 
 
 @router.put("/app-settings", response_model=AppSettingsOut)
-def write_settings(body: AppSettingsIn, user_id: str = Depends(require_user_id)):
-    _ = user_id
+def write_settings(body: AppSettingsIn, auth: AuthCtx = Depends(require_admin_auth)):
     if not is_configured():
         raise HTTPException(503, "Supabase not configured")
     try:
-        return update_app_settings(body.model_dump())
+        return update_app_settings(body.model_dump(), access_token=auth.access_token)
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc

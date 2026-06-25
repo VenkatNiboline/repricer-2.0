@@ -1,2 +1,5 @@
 [functions.sync-catalog]
 verify_jwt = false
+
+[functions.sync-sales]
+verify_jwt = false

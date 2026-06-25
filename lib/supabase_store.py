@@ -5,14 +5,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from dotenv import load_dotenv
+from marketplaces import catalog_table_for_country
+
+from env_config import load_env
 
 ROOT = Path(__file__).parent.parent
 ENV_FILE = ROOT / "ENV" / "AmazonCredentials.env"
 
-load_dotenv(ENV_FILE)
+load_env()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 _client = None
@@ -23,6 +26,7 @@ def is_configured() -> bool:
 
 
 def get_client():
+    """Service-role client. Bypasses RLS — use only for system/cron/background paths."""
     global _client
     if not is_configured():
         raise RuntimeError(
@@ -35,16 +39,48 @@ def get_client():
     return _client
 
 
+def get_user_client(access_token: str):
+    """Request-scoped client that runs queries AS the caller, so RLS policies apply.
+
+    Built from the anon key with the user's JWT attached. PostgREST resolves
+    auth.uid() and the authenticated role from this token, enforcing table policies.
+    """
+    if not access_token:
+        raise RuntimeError("Access token required for user-scoped Supabase client")
+    if not (SUPABASE_URL and SUPABASE_ANON_KEY):
+        raise RuntimeError("Supabase auth not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY.")
+    from supabase import create_client
+
+    client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+    client.postgrest.auth(access_token)
+    return client
+
+
+def _client_for(access_token: Optional[str]):
+    """User-scoped client when a token is present (RLS enforced); service-role otherwise."""
+    return get_user_client(access_token) if access_token else get_client()
+
+
+def get_profile(user_id: str, access_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not is_configured():
+        return None
+    client = _client_for(access_token)
+    result = client.table("profiles").select("*").eq("id", user_id).limit(1).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 def upsert_catalog_rows(country: str, rows: List[Dict[str, Any]]) -> int:
     client = get_client()
+    table = catalog_table_for_country(country)
     now = datetime.now(timezone.utc).isoformat()
     payload = []
     for row in rows:
         payload.append(
             {
                 "sku": row["sku"],
-                "country": country.upper(),
                 "asin": row.get("asin"),
+                "product_name": row.get("product_name"),
                 "product_type": row.get("product_type"),
                 "fulfillment": row.get("fulfillment", "UNKNOWN"),
                 "price": row.get("price"),
@@ -61,7 +97,7 @@ def upsert_catalog_rows(country: str, rows: List[Dict[str, Any]]) -> int:
     batch_size = 200
     for index in range(0, len(payload), batch_size):
         batch = payload[index : index + batch_size]
-        client.table("sku_catalog").upsert(batch, on_conflict="sku,country").execute()
+        client.table(table).upsert(batch, on_conflict="sku").execute()
     return len(payload)
 
 
@@ -70,9 +106,11 @@ def get_catalog_rows(
     fulfillment: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 5000,
+    access_token: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    client = get_client()
-    query = client.table("sku_catalog").select("*").eq("country", country.upper()).limit(limit)
+    client = _client_for(access_token)
+    table = catalog_table_for_country(country)
+    query = client.table(table).select("*").limit(limit)
     if fulfillment and fulfillment.upper() != "ALL":
         query = query.eq("fulfillment", fulfillment.upper())
     result = query.order("sku").execute()
@@ -84,12 +122,13 @@ def get_catalog_rows(
             for row in rows
             if needle in (row.get("sku") or "").lower()
             or needle in (row.get("asin") or "").lower()
+            or needle in (row.get("product_name") or "").lower()
         ]
     return rows
 
 
-def catalog_stats_from_db(country: str) -> Dict[str, Any]:
-    rows = get_catalog_rows(country)
+def catalog_stats_from_db(country: str, access_token: Optional[str] = None) -> Dict[str, Any]:
+    rows = get_catalog_rows(country, access_token=access_token)
     fba = sum(1 for row in rows if row.get("fulfillment") == "FBA")
     fbm = sum(1 for row in rows if row.get("fulfillment") == "FBM")
     fbm_suffix = sum(1 for row in rows if row.get("is_fbm"))
@@ -138,16 +177,24 @@ def get_sku_rule(sku: str, country: str) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
-def list_sku_rules(country: Optional[str] = None, limit: int = 500) -> List[Dict[str, Any]]:
-    client = get_client()
+def list_sku_rules(
+    country: Optional[str] = None,
+    limit: int = 500,
+    access_token: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _client_for(access_token)
     query = client.table("sku_rules").select("*").order("updated_at", desc=True).limit(limit)
     if country:
         query = query.eq("country", country.upper())
     return query.execute().data or []
 
 
-def upsert_sku_rule(rule: Dict[str, Any], updated_by: Optional[str] = None) -> Dict[str, Any]:
-    client = get_client()
+def upsert_sku_rule(
+    rule: Dict[str, Any],
+    updated_by: Optional[str] = None,
+    access_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    client = _client_for(access_token)
     payload = {
         "sku": rule["sku"],
         "country": rule["country"].upper(),
@@ -164,8 +211,8 @@ def upsert_sku_rule(rule: Dict[str, Any], updated_by: Optional[str] = None) -> D
     return (result.data or [payload])[0]
 
 
-def delete_sku_rule(sku: str, country: str) -> None:
-    client = get_client()
+def delete_sku_rule(sku: str, country: str, access_token: Optional[str] = None) -> None:
+    client = _client_for(access_token)
     client.table("sku_rules").delete().eq("sku", sku).eq("country", country.upper()).execute()
 
 
@@ -180,10 +227,30 @@ def apply_price_bounds(price: float, rule: Optional[Dict[str, Any]]) -> float:
     return round(bounded, 2)
 
 
-def record_price_history(entries: List[Dict[str, Any]]) -> None:
+def record_price_history(entries: List[Dict[str, Any]], *, access_token: Optional[str] = None) -> None:
     if not entries:
         return
-    client = get_client()
+    if not is_configured():
+        raise RuntimeError(
+            "Cannot save price history. Set SUPABASE_SERVICE_ROLE_KEY in ENV/AmazonCredentials.env"
+        )
+
+    for entry in entries:
+        if entry.get("dry_run"):
+            entry["reflection_status"] = "not_applicable"
+        elif not entry.get("pushed"):
+            entry["reflection_status"] = "not_applicable"
+        elif entry.get("verified_price") is not None:
+            target = float(entry["new_price"])
+            verified = float(entry["verified_price"])
+            entry["reflection_status"] = "reflected" if abs(target - verified) < 0.02 else "mismatch"
+            entry["reflection_checked_at"] = datetime.now(timezone.utc).isoformat()
+            entry["reflection_attempts"] = 1
+        else:
+            entry["reflection_status"] = "pending"
+            entry["reflection_attempts"] = 0
+
+    client = _client_for(access_token)
     client.table("price_history").insert(entries).execute()
 
 
@@ -191,8 +258,9 @@ def list_price_history(
     country: Optional[str] = None,
     sku: Optional[str] = None,
     limit: int = 100,
+    access_token: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    client = get_client()
+    client = _client_for(access_token)
     query = client.table("price_history").select("*").order("created_at", desc=True).limit(limit)
     if country:
         query = query.eq("country", country.upper())
@@ -201,8 +269,125 @@ def list_price_history(
     return query.execute().data or []
 
 
-def get_app_settings() -> Dict[str, Any]:
+def list_pending_reflections(limit: int = 50) -> List[Dict[str, Any]]:
     client = get_client()
+    result = (
+        client.table("price_history")
+        .select("*")
+        .eq("reflection_status", "pending")
+        .eq("pushed", True)
+        .eq("dry_run", False)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []
+
+
+def update_price_history_reflection(
+    history_id: int,
+    *,
+    reflection_status: str,
+    verified_price: Optional[float] = None,
+    reflection_attempts: int,
+    error: Optional[str] = None,
+) -> None:
+    client = get_client()
+    payload: Dict[str, Any] = {
+        "reflection_status": reflection_status,
+        "reflection_checked_at": datetime.now(timezone.utc).isoformat(),
+        "reflection_attempts": reflection_attempts,
+    }
+    if verified_price is not None:
+        payload["verified_price"] = verified_price
+    if error is not None:
+        payload["error"] = error
+    client.table("price_history").update(payload).eq("id", history_id).execute()
+
+
+def insert_qc_run(agent_name: str) -> int:
+    client = get_client()
+    result = (
+        client.table("qc_runs")
+        .insert({"agent_name": agent_name, "status": "running"})
+        .execute()
+    )
+    return int((result.data or [{"id": 0}])[0]["id"])
+
+
+def complete_qc_run(run_id: int, *, status: str, summary: str, findings_count: int) -> None:
+    client = get_client()
+    client.table("qc_runs").update(
+        {
+            "status": status,
+            "summary": summary,
+            "findings_count": findings_count,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", run_id).execute()
+
+
+def insert_qc_findings(findings: List[Dict[str, Any]]) -> int:
+    if not findings:
+        return 0
+    client = get_client()
+    client.table("qc_findings").insert(findings).execute()
+    return len(findings)
+
+
+def list_qc_findings(
+    *,
+    resolved: Optional[bool] = False,
+    severity: Optional[str] = None,
+    limit: int = 100,
+    access_token: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    client = _client_for(access_token)
+    query = client.table("qc_findings").select("*").order("created_at", desc=True).limit(limit)
+    if resolved is not None:
+        query = query.eq("resolved", resolved)
+    if severity:
+        query = query.eq("severity", severity)
+    return query.execute().data or []
+
+
+def resolve_qc_finding(finding_id: int, access_token: Optional[str] = None) -> None:
+    client = _client_for(access_token)
+    client.table("qc_findings").update({"resolved": True}).eq("id", finding_id).execute()
+
+
+def upsert_sales_rows(rows: List[Dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    client = get_client()
+    batch_size = 200
+    for index in range(0, len(rows), batch_size):
+        batch = rows[index : index + batch_size]
+        client.table("sales_daily").upsert(batch, on_conflict="ob_marketplace_id,child_asin,ob_date").execute()
+    return len(rows)
+
+
+def list_sales_daily(
+    country: Optional[str] = None,
+    sku: Optional[str] = None,
+    days: int = 30,
+    limit: int = 500,
+    access_token: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    from price import marketplace_id_for_country
+
+    client = _client_for(access_token)
+    query = client.table("sales_daily").select("*").order("ob_date", desc=True).limit(limit)
+    if country:
+        mp_id = marketplace_id_for_country(country.upper())
+        query = query.eq("ob_marketplace_id", mp_id)
+    if sku:
+        query = query.eq("sku", sku)
+    return query.execute().data or []
+
+
+def get_app_settings(access_token: Optional[str] = None) -> Dict[str, Any]:
+    client = _client_for(access_token)
     result = client.table("app_settings").select("*").eq("id", 1).limit(1).execute()
     rows = result.data or []
     if rows:
@@ -216,8 +401,8 @@ def get_app_settings() -> Dict[str, Any]:
     }
 
 
-def update_app_settings(values: Dict[str, Any]) -> Dict[str, Any]:
-    client = get_client()
+def update_app_settings(values: Dict[str, Any], access_token: Optional[str] = None) -> Dict[str, Any]:
+    client = _client_for(access_token)
     payload = {
         "default_country": values.get("default_country", "DE"),
         "default_region": values.get("default_region", "EU"),

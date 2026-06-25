@@ -1,6 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import { CatalogRow, getAccessToken, scanAmazonCatalog } from "./amazon.ts";
+import { CatalogRow, catalogTableForCountry, getAccessToken, scanAmazonCatalog } from "./amazon.ts";
 
 const BATCH_SIZE = 200;
 
@@ -18,16 +18,42 @@ function json(data: unknown, status = 200) {
   });
 }
 
+async function authorize(req: Request): Promise<{ ok: boolean; source: string }> {
+  const cronSecret = Deno.env.get("CRON_SECRET");
+  const providedSecret = req.headers.get("x-cron-secret");
+  if (cronSecret && providedSecret === cronSecret) {
+    return { ok: true, source: "edge_cron" };
+  }
+
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return { ok: false, source: "" };
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!supabaseUrl || !anonKey) {
+    return { ok: false, source: "" };
+  }
+
+  const client = createClient(supabaseUrl, anonKey);
+  const token = authHeader.slice(7);
+  const { data, error } = await client.auth.getUser(token);
+  if (error || !data.user) return { ok: false, source: "" };
+  return { ok: true, source: "edge_ui" };
+}
+
 async function upsertCatalogRows(
   supabase: ReturnType<typeof createClient>,
   country: string,
   rows: CatalogRow[],
 ): Promise<void> {
+  const table = catalogTableForCountry(country);
   const now = new Date().toISOString();
   const payload = rows.map((row) => ({
     sku: row.sku,
-    country: country.toUpperCase(),
     asin: row.asin,
+    product_name: row.product_name,
     product_type: row.product_type,
     fulfillment: row.fulfillment,
     price: row.price,
@@ -40,9 +66,9 @@ async function upsertCatalogRows(
   for (let i = 0; i < payload.length; i += BATCH_SIZE) {
     const batch = payload.slice(i, i + BATCH_SIZE);
     const { error } = await supabase
-      .from("sku_catalog")
-      .upsert(batch, { onConflict: "sku,country" });
-    if (error) throw new Error(`Supabase upsert failed: ${error.message}`);
+      .from(table)
+      .upsert(batch, { onConflict: "sku" });
+    if (error) throw new Error(`Supabase upsert failed (${table}): ${error.message}`);
   }
 }
 
@@ -50,11 +76,12 @@ async function recordSyncRun(
   supabase: ReturnType<typeof createClient>,
   country: string,
   skuCount: number,
+  source: string,
 ): Promise<void> {
   const { error } = await supabase.from("catalog_sync_runs").insert({
     country: country.toUpperCase(),
     sku_count: skuCount,
-    source: "edge_cron",
+    source,
     completed_at: new Date().toISOString(),
   });
   if (error) throw new Error(`Failed to record sync run: ${error.message}`);
@@ -65,10 +92,9 @@ Deno.serve(async (req) => {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const cronSecret = Deno.env.get("CRON_SECRET");
-  const providedSecret = req.headers.get("x-cron-secret");
-  if (!cronSecret || providedSecret !== cronSecret) {
-    return unauthorized("Invalid or missing x-cron-secret");
+  const auth = await authorize(req);
+  if (!auth.ok) {
+    return unauthorized("Sign in required or invalid cron secret");
   }
 
   const sellerId = Deno.env.get("SELLER_ID");
@@ -79,7 +105,7 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) {
-    return json({ error: "Supabase env not configured" }, 500);
+    return json({ error: "SUPABASE_SERVICE_ROLE_KEY not configured" }, 500);
   }
 
   let country = "DE";
@@ -89,7 +115,7 @@ Deno.serve(async (req) => {
     if (body?.country) country = String(body.country).toUpperCase();
     if (body?.region) region = String(body.region).toUpperCase();
   } catch {
-    // empty body is fine — use defaults
+    // defaults are fine
   }
 
   const startedAt = Date.now();
@@ -100,24 +126,26 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     await upsertCatalogRows(supabase, country, rows);
-    await recordSyncRun(supabase, country, rows.length);
+    await recordSyncRun(supabase, country, rows.length, auth.source);
 
     const fba = rows.filter((r) => r.fulfillment === "FBA").length;
     const fbm = rows.filter((r) => r.fulfillment === "FBM").length;
     const fbmSuffix = rows.filter((r) => r.is_fbm).length;
+    const syncedAt = new Date().toISOString();
 
     return json({
       ok: true,
       country,
       region,
-      source: "edge_cron",
+      source: auth.source,
       count: rows.length,
       stats: {
         total: rows.length,
         fba,
         fbm,
         fbm_suffix: fbmSuffix,
-        synced_at: new Date().toISOString(),
+        synced_at: syncedAt,
+        source: "supabase",
       },
       duration_ms: Date.now() - startedAt,
     });

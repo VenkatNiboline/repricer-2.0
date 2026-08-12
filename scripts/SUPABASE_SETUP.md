@@ -1,6 +1,22 @@
 # Supabase project: amazon-repricer
 # Dashboard: https://supabase.com/dashboard/project/mpdhzvklvyzjwxpvsfkw
 
+## Go live
+
+1. Ensure the Supabase project is **Active** (not paused) in the dashboard.
+2. Set `AMAZON_API_ENABLED=true` and fill `SUPABASE_SERVICE_ROLE_KEY` in `ENV/AmazonCredentials.env`.
+3. Run `./scripts/activate_live.sh` (requires `npx vercel login` once).
+4. In Supabase → Edge Functions → Secrets, set `AMAZON_API_ENABLED=true` and `CRON_SECRET` (same as env file).
+5. Verify: `curl https://repricer-2-0.vercel.app/api/health` → `amazon_api_enabled: true`, `db_write_ready: true`.
+
+Cron jobs (re-enabled by migration `20260625120000_resume_amazon_cron_jobs.sql`):
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| `sync-amazon-catalog` | Every 6h at :15 UTC | DE catalog from Amazon |
+| `sync-amazon-sales` | Daily 06:00 UTC | Sales & Traffic ETL |
+| `verify-price-reflections` | Every minute | Poll pending price reflections |
+
 ## Edge Function secrets (Dashboard → Edge Functions → Secrets)
 
 Applies to **sync-catalog** and **sync-sales**:
